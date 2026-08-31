@@ -13,10 +13,13 @@ import {
   deleteDoc,
   serverTimestamp,
 } from "firebase/firestore";
+import { ref as storageRefFn, uploadBytes, getDownloadURL } from "firebase/storage";
 import { Platform } from "react-native";
 import * as SecureStore from "expo-secure-store";
-import { db } from "../lib/firebase";
+import { db, storage } from "../lib/firebase";
 import { normalizeQuestionOption } from "../utils/question-normalizer";
+import { normalizeGrade } from "./weak-topic-resource-engine";
+import { validateExamComposition } from "../utils/exam-validator";
 import type {
   User,
   Exam,
@@ -31,6 +34,8 @@ import type {
   QuestionLevel,
   UserRole,
   TeacherReview,
+  LeaderboardEntry,
+  LoginAuditRecord,
 } from "../types";
 
 // ==========================================
@@ -63,6 +68,63 @@ export async function createOrUpdateUserProfile(user: Partial<User> & { uid: str
   } catch (error) {
     console.error("Error creating/updating user profile:", error);
     throw error;
+  }
+}
+
+/**
+ * Updates a user's profile photo.
+ * If given a local file uri, uploads it to Firebase Storage and saves the resulting URL to Firestore.
+ */
+export async function updateUserProfilePhoto(
+  uid: string,
+  photoUriOrUrl: string
+): Promise<{ success: boolean; photoUrl?: string; error?: string }> {
+  try {
+    let finalUrl = photoUriOrUrl;
+
+    // If local file URI (file://, blob:, ph://), upload to Firebase Storage
+    if (!photoUriOrUrl.startsWith("http://") && !photoUriOrUrl.startsWith("https://")) {
+      if (storage) {
+        const storagePath = `profile_photos/${uid}/${Date.now()}_avatar.jpg`;
+        const storageRef = storageRefFn(storage, storagePath);
+        const response = await fetch(photoUriOrUrl);
+        const blob = await response.blob();
+        await uploadBytes(storageRef, blob);
+        finalUrl = await getDownloadURL(storageRef);
+      }
+    }
+
+    const userRef = doc(db, "users", uid);
+    await updateDoc(userRef, {
+      avatarUrl: finalUrl,
+      photoURL: finalUrl,
+      updatedAt: new Date().toISOString(),
+    });
+
+    return { success: true, photoUrl: finalUrl };
+  } catch (error: any) {
+    console.error("Error updating user profile photo:", error);
+    return { success: false, error: error?.message || "Failed to update profile photo." };
+  }
+}
+
+/**
+ * Removes a user's profile photo and resets avatar to initials.
+ */
+export async function removeUserProfilePhoto(
+  uid: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const userRef = doc(db, "users", uid);
+    await updateDoc(userRef, {
+      avatarUrl: "",
+      photoURL: "",
+      updatedAt: new Date().toISOString(),
+    });
+    return { success: true };
+  } catch (error: any) {
+    console.error("Error removing user profile photo:", error);
+    return { success: false, error: error?.message || "Failed to remove profile photo." };
   }
 }
 
@@ -267,8 +329,8 @@ export async function getQuestionBank(
     snapshot.forEach((docSnap) => {
       const data = docSnap.data() as Question;
 
-      if (subject && data.subject && data.subject !== subject) return;
-      if (grade && data.grade && data.grade !== grade) return;
+      if (subject && data.subject && normalizeSubject(String(data.subject)) !== normalizeSubject(String(subject))) return;
+      if (grade && data.grade && normalizeGrade(String(data.grade)) !== normalizeGrade(String(grade))) return;
       if (level && data.level && data.level !== level) return;
 
       questions.push({ ...data, id: docSnap.id });
@@ -341,9 +403,9 @@ export async function getStudentExams(user: User | null): Promise<Exam[]> {
       // Ensure status is published (unless admin/teacher)
       if (status !== "published" && status !== "active") return;
 
-      if (user.grade && data.grade && String(data.grade).trim() !== String(user.grade).trim()) return;
-      if (user.section && data.section && String(data.section).trim() !== String(user.section).trim()) return;
-      if (user.stream && data.stream && String(data.stream).trim() !== String(user.stream).trim()) return;
+      if (user.grade && data.grade && normalizeGrade(String(data.grade)) !== normalizeGrade(String(user.grade))) return;
+      if (user.section && data.section && String(data.section).trim().toUpperCase() !== String(user.section).trim().toUpperCase()) return;
+      if (user.stream && data.stream && String(data.stream).trim().toLowerCase() !== String(user.stream).trim().toLowerCase()) return;
 
       exams.push({ ...data, id: docSnap.id });
     });
@@ -429,6 +491,25 @@ export async function createExam(examData: Partial<Exam>, creator?: User | null)
       createdByName: creator?.name || examData.createdByName || "Faculty Member",
       createdAt: new Date().toISOString(),
     };
+
+    // Integrity gate: every question must match the exam's grade + subject
+    // (normalized). Corrupted / cross-subject exams are refused, not stored.
+    if (newExam.questionIds && newExam.questionIds.length > 0) {
+      const examQuestions: Question[] = [];
+      for (const qId of newExam.questionIds) {
+        try {
+          const qDoc = await getDoc(doc(db, "questions", qId));
+          if (qDoc.exists()) examQuestions.push({ id: qDoc.id, ...(qDoc.data() as any) } as Question);
+        } catch (e) {}
+      }
+      if (examQuestions.length > 0) {
+        const validation = validateExamComposition(newExam, examQuestions);
+        if (!validation.valid) {
+          console.error("[ZeePrep] Exam creation blocked — question/exam mismatch:", validation.errors);
+          return null;
+        }
+      }
+    }
 
     await setDoc(examDocRef, newExam);
     return newExam;
@@ -1333,6 +1414,42 @@ export async function addStudyResource(resourceData: Partial<StudyResource>, upl
   }
 }
 
+export async function requestStudyResourceFromTeacher(
+  student: User | null,
+  topic: string,
+  subject?: string,
+  examTitle?: string,
+  reportId?: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const notifRef = doc(collection(db, "notifications"));
+    const newNotification = {
+      id: notifRef.id,
+      title: `Resource Request: ${topic}`,
+      message: `${student?.name || "Student"} (${student?.grade ? `Class ${student.grade}` : "Class 10"}) is requesting study material/practice problems for "${topic}" in ${subject || "Exam"}.`,
+      type: "resource_uploaded",
+      recipientId: "all_teachers",
+      recipientRole: "teacher",
+      studentId: student?.uid || "",
+      studentName: student?.name || "Student",
+      studentEmail: student?.email || "",
+      grade: student?.grade || "10",
+      section: student?.section || "A",
+      subject: subject || "General",
+      topic: topic,
+      examTitle: examTitle || "",
+      reportId: reportId || "",
+      read: false,
+      createdAt: new Date().toISOString(),
+    };
+    await setDoc(notifRef, newNotification);
+    return { success: true };
+  } catch (err: any) {
+    console.error("[ZeePrep] Error requesting study resource:", err);
+    return { success: false, error: err?.message || "Failed to notify teacher" };
+  }
+}
+
 export async function getAllStudentReports(): Promise<Report[]> {
   try {
     const reportsMap = new Map<string, Report>();
@@ -1387,6 +1504,227 @@ export async function getAllStudentReports(): Promise<Report[]> {
 // 6. LEADERBOARDS & AUDIT LOGS
 // ==========================================
 
+/**
+ * Fetches aggregated student standings for the leaderboard with avatar photos,
+ * XP calculations, accuracy metrics, and optional grade/subject filters.
+ */
+export async function getAggregatedLeaderboard(
+  gradeFilter?: string,
+  subjectFilter?: string
+): Promise<LeaderboardEntry[]> {
+  try {
+    // 1. Fetch reports and users concurrently
+    const [reportsSnap, usersSnap] = await Promise.allSettled([
+      getDocs(collection(db, "reports")),
+      getDocs(collection(db, "users")),
+    ]);
+
+    const usersMap = new Map<string, Partial<User>>();
+    const registeredStudents: Partial<User>[] = [];
+
+    if (usersSnap.status === "fulfilled") {
+      usersSnap.value.forEach((d) => {
+        const u = d.data() as User;
+        const entry = {
+          uid: d.id,
+          avatarUrl: u.avatarUrl || u.photoURL,
+          photoURL: u.photoURL || u.avatarUrl,
+          name: u.name,
+          grade: u.grade,
+          section: u.section,
+          schoolName: u.schoolName,
+          email: u.email,
+          role: u.role,
+        };
+        usersMap.set(d.id, entry);
+        if (u.role === "student" || !u.role) {
+          registeredStudents.push(entry);
+        }
+      });
+    }
+
+    const rawReports: Report[] = [];
+    if (reportsSnap.status === "fulfilled") {
+      reportsSnap.value.forEach((d) => {
+        rawReports.push({ id: d.id, ...d.data() } as Report);
+      });
+    }
+
+    // 2. Aggregate reports by studentId
+    const studentAggregates = new Map<string, {
+      studentId: string;
+      studentName: string;
+      studentEmail?: string;
+      avatarUrl?: string;
+      grade?: string;
+      section?: string;
+      schoolName?: string;
+      bestPercentage: number;
+      percentages: number[];
+      accuracies: number[];
+      totalAssessments: number;
+      totalMarksObtained: number;
+      totalMarksPossible: number;
+      latestExamTitle?: string;
+      subject?: string;
+      latestDate?: string;
+    }>();
+
+    for (const rep of rawReports) {
+      const sId = rep.studentId || rep.studentEmail || rep.studentName || rep.id;
+      if (!sId) continue;
+
+      const userMeta = rep.studentId ? usersMap.get(rep.studentId) : undefined;
+      const sName = rep.studentName || userMeta?.name || "Student Competitor";
+      const sEmail = rep.studentEmail || userMeta?.email || "";
+      const avatar = userMeta?.avatarUrl || userMeta?.photoURL || (rep as any).avatarUrl || "";
+      const sGrade = rep.grade || userMeta?.grade || "10";
+      const sSection = (rep as any).section || userMeta?.section || "A";
+      const school = (rep as any).schoolName || userMeta?.schoolName || "ZeePrep Academy";
+
+      const pct = typeof rep.percentage === "number" ? rep.percentage : (Number(rep.percentage) || 0);
+      const acc = typeof rep.accuracy === "number" ? rep.accuracy : (Number(rep.accuracy) || pct);
+      const obtained = Number(rep.obtainedMarks) || 0;
+      const total = Number(rep.totalMarks) || 100;
+      const dateStr = rep.createdAt || "";
+
+      if (!studentAggregates.has(sId)) {
+        studentAggregates.set(sId, {
+          studentId: sId,
+          studentName: sName,
+          studentEmail: sEmail,
+          avatarUrl: avatar,
+          grade: sGrade,
+          section: sSection,
+          schoolName: school,
+          bestPercentage: pct,
+          percentages: [pct],
+          accuracies: [acc],
+          totalAssessments: 1,
+          totalMarksObtained: obtained,
+          totalMarksPossible: total,
+          latestExamTitle: rep.examTitle,
+          subject: rep.subject,
+          latestDate: dateStr,
+        });
+      } else {
+        const curr = studentAggregates.get(sId)!;
+        curr.totalAssessments += 1;
+        curr.percentages.push(pct);
+        curr.accuracies.push(acc);
+        curr.totalMarksObtained += obtained;
+        curr.totalMarksPossible += total;
+        if (pct > curr.bestPercentage) {
+          curr.bestPercentage = pct;
+        }
+        if (!curr.avatarUrl && avatar) {
+          curr.avatarUrl = avatar;
+        }
+        if (dateStr && (!curr.latestDate || new Date(dateStr) > new Date(curr.latestDate))) {
+          curr.latestDate = dateStr;
+          curr.latestExamTitle = rep.examTitle;
+          curr.subject = rep.subject;
+        }
+      }
+    }
+
+    // 3. Add registered students who haven't taken assessments yet
+    for (const student of registeredStudents) {
+      if (student.uid && !studentAggregates.has(student.uid)) {
+        studentAggregates.set(student.uid, {
+          studentId: student.uid,
+          studentName: student.name || "Enrolled Student",
+          studentEmail: student.email || "",
+          avatarUrl: student.avatarUrl || student.photoURL || "",
+          grade: student.grade || "10",
+          section: student.section || "A",
+          schoolName: student.schoolName || "ZeePrep Academy",
+          bestPercentage: 0,
+          percentages: [0],
+          accuracies: [0],
+          totalAssessments: 0,
+          totalMarksObtained: 0,
+          totalMarksPossible: 100,
+          latestExamTitle: "Pending Assessment",
+          subject: "General",
+          latestDate: new Date().toISOString(),
+        });
+      }
+    }
+
+    // 4. Convert to LeaderboardEntry array
+    let entries: LeaderboardEntry[] = Array.from(studentAggregates.values()).map((s) => {
+      const validPcts = s.percentages.filter((p) => p > 0);
+      const avgPct = validPcts.length > 0
+        ? Math.round(validPcts.reduce((a, b) => a + b, 0) / validPcts.length)
+        : s.bestPercentage;
+      const validAccs = s.accuracies.filter((a) => a > 0);
+      const avgAcc = validAccs.length > 0
+        ? Math.round(validAccs.reduce((a, b) => a + b, 0) / validAccs.length)
+        : avgPct;
+      const xp = s.bestPercentage * 10 + s.totalAssessments * 50;
+
+      return {
+        id: `leader_${s.studentId}`,
+        studentId: s.studentId,
+        studentName: s.studentName,
+        studentEmail: s.studentEmail,
+        avatarUrl: s.avatarUrl,
+        grade: s.grade,
+        section: s.section,
+        schoolName: s.schoolName,
+        bestPercentage: s.bestPercentage,
+        avgPercentage: avgPct,
+        accuracy: avgAcc,
+        totalAssessments: s.totalAssessments,
+        totalMarksObtained: s.totalMarksObtained,
+        totalMarksPossible: s.totalMarksPossible,
+        latestExamTitle: s.latestExamTitle,
+        subject: s.subject,
+        xpPoints: xp,
+        lastActiveDate: s.latestDate,
+      };
+    });
+
+    // 5. Filter by Grade if specified
+    if (gradeFilter && gradeFilter !== "all") {
+      const targetGradeNum = gradeFilter.replace(/[^0-9]/g, "");
+      entries = entries.filter((e) => {
+        const eg = (e.grade || "").replace(/[^0-9]/g, "");
+        return (targetGradeNum && eg === targetGradeNum) || (e.grade || "").toLowerCase().includes(gradeFilter.toLowerCase());
+      });
+    }
+
+    if (subjectFilter && subjectFilter !== "all") {
+      entries = entries.filter((e) =>
+        (e.subject || "").toLowerCase().includes(subjectFilter.toLowerCase())
+      );
+    }
+
+    // 6. Sort by best percentage descending, then totalAssessments descending
+    entries.sort((a, b) => {
+      if (b.bestPercentage !== a.bestPercentage) {
+        return b.bestPercentage - a.bestPercentage;
+      }
+      if (b.xpPoints !== a.xpPoints) {
+        return (b.xpPoints || 0) - (a.xpPoints || 0);
+      }
+      return b.totalAssessments - a.totalAssessments;
+    });
+
+    // 7. Assign ranks
+    entries = entries.map((e, index) => ({
+      ...e,
+      rank: index + 1,
+    }));
+
+    return entries;
+  } catch (error) {
+    console.error("Error generating aggregated leaderboard:", error);
+    return [];
+  }
+}
+
 export async function getLeaderboardData(): Promise<Report[]> {
   try {
     const q = query(collection(db, "reports"), orderBy("percentage", "desc"), limit(20));
@@ -1397,8 +1735,97 @@ export async function getLeaderboardData(): Promise<Report[]> {
     });
     return reports;
   } catch (error) {
-    console.error("Error fetching leaderboard:", error);
-    return [];
+    console.warn("Fallback query for leaderboard without index:", error);
+    try {
+      const snap = await getDocs(collection(db, "reports"));
+      const list: Report[] = [];
+      snap.forEach((d) => list.push({ ...d.data(), id: d.id } as Report));
+      list.sort((a, b) => (b.percentage || 0) - (a.percentage || 0));
+      return list.slice(0, 20);
+    } catch (e2) {
+      console.error("Error in fallback leaderboard query:", e2);
+      return [];
+    }
+  }
+}
+
+/**
+ * Records user login with IP address, device platform, and timestamps
+ * in both the user profile document and the loginAudit security collection.
+ */
+export async function recordUserLoginAudit(
+  user: User,
+  ipAddress: string = "Unknown IP"
+): Promise<void> {
+  try {
+    const timestamp = new Date().toISOString();
+    const platform = Platform.OS;
+    const deviceStr = `${Platform.OS} ${Platform.Version || ""}`.trim();
+
+    // 1. Update user profile document with lastLogin details
+    const userRef = doc(db, "users", user.uid);
+    const existingHistory = user.loginHistory || [];
+    const newHistoryEntry = {
+      ip: ipAddress,
+      timestamp,
+      platform,
+      userAgent: typeof navigator !== "undefined" ? (navigator as any).userAgent : undefined,
+    };
+    const updatedHistory = [newHistoryEntry, ...existingHistory.slice(0, 24)];
+
+    await updateDoc(userRef, {
+      lastLoginIp: ipAddress,
+      lastLoginAt: timestamp,
+      lastLoginPlatform: platform,
+      lastLoginDevice: deviceStr,
+      loginHistory: updatedHistory,
+      updatedAt: timestamp,
+    });
+
+    // 2. Add structured audit record into loginAudit collection
+    await addDoc(collection(db, "loginAudit"), {
+      uid: user.uid,
+      name: user.name || "Unknown User",
+      email: user.email || "",
+      loginId: user.loginId || "",
+      role: user.role || "student",
+      schoolName: user.schoolName || "",
+      grade: user.grade || "",
+      section: user.section || "",
+      ipAddress,
+      platform,
+      device: deviceStr,
+      timestamp,
+      status: "success",
+      createdAt: serverTimestamp(),
+    });
+  } catch (err) {
+    console.warn("[ZeePrep] Notice: Login audit record exception (non-fatal):", err);
+  }
+}
+
+/**
+ * Retrieves login audit logs for administrative security monitoring.
+ */
+export async function getLoginAuditLogs(limitCount: number = 50): Promise<LoginAuditRecord[]> {
+  try {
+    const q = query(collection(db, "loginAudit"), orderBy("timestamp", "desc"), limit(limitCount));
+    const snapshot = await getDocs(q);
+    const logs: LoginAuditRecord[] = [];
+    snapshot.forEach((d) => logs.push({ id: d.id, ...d.data() } as LoginAuditRecord));
+    return logs;
+  } catch (error) {
+    console.warn("Fallback query for login audits without index:", error);
+    try {
+      const snap = await getDocs(collection(db, "loginAudit"));
+      const list: LoginAuditRecord[] = [];
+      snap.forEach((d) => list.push({ id: d.id, ...d.data() } as LoginAuditRecord));
+      list.sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
+      return list.slice(0, limitCount);
+    } catch (e2) {
+      console.error("Error in fallback login audit query:", e2);
+      return [];
+    }
   }
 }
 
@@ -1877,5 +2304,564 @@ export async function getBoardForecastForSubject(
     return { profile, snapshot, record: cached || null };
   } finally {
     forecastInflight.delete(id);
+  }
+}
+
+// ==========================================
+// 8. HOME DASHBOARD ENGINES (STUDENT & TEACHER)
+// ==========================================
+
+export interface StudentHomeWeakTopic {
+  topic: string;
+  subject: string;
+  accuracy: number;
+  totalQuestions: number;
+  wrongCount: number;
+  recommendedResource?: StudyResource;
+  suggestionText: string;
+}
+
+export interface StudentHomeResourceRecommendation {
+  resource: StudyResource;
+  reason: string;
+  isWeakTopicMatch: boolean;
+}
+
+export interface StudentHomeDashboardData {
+  student: User;
+  overallPerformance: number;
+  recentTrend: "improving" | "stable" | "declining" | "neutral";
+  latestAssessment?: {
+    id: string;
+    title: string;
+    subject: string;
+    percentage: number;
+    accuracy: number;
+    date: string;
+  };
+  totalCompletedReports: number;
+  activeExamsCount: number;
+  weakTopics: StudentHomeWeakTopic[];
+  recommendedResources: StudentHomeResourceRecommendation[];
+  recentAssessments: {
+    id: string;
+    title: string;
+    subject: string;
+    percentage: number;
+    accuracy: number;
+    trend: "up" | "stable" | "down";
+    date: string;
+  }[];
+  preparationTrend: {
+    scores: number[];
+    summaryText: string;
+    isAvailable: boolean;
+  };
+  boardForecast?: {
+    subject: string;
+    predictedPercentage: number;
+    rangeMin: number;
+    rangeMax: number;
+    confidence: "High" | "Medium" | "Developing";
+  };
+  nextStep: {
+    title: string;
+    description: string;
+    actionType: "resource" | "exam" | "practice";
+    actionLabel: string;
+    targetId?: string;
+    targetUrl?: string;
+  };
+}
+
+export async function getStudentHomeDashboardData(user: User): Promise<StudentHomeDashboardData> {
+  const defaultEmpty: StudentHomeDashboardData = {
+    student: user,
+    overallPerformance: 0,
+    recentTrend: "neutral",
+    totalCompletedReports: 0,
+    activeExamsCount: 0,
+    weakTopics: [],
+    recommendedResources: [],
+    recentAssessments: [],
+    preparationTrend: {
+      scores: [],
+      summaryText: "Your preparation trend will appear here as you complete more assessments.",
+      isAvailable: false,
+    },
+    nextStep: {
+      title: "Start Your First Assessment",
+      description: "Complete a diagnostic assessment to discover your strengths and focus areas.",
+      actionType: "exam",
+      actionLabel: "Browse Available Exams",
+    },
+  };
+
+  if (!user || !user.uid) return defaultEmpty;
+
+  try {
+    const [reports, exams, resources] = await Promise.all([
+      getStudentReportsList(user.uid),
+      getStudentExams(user),
+      getStudyResources(user),
+    ]);
+
+    const activeExams = exams.filter((e) => e.status === "published" || e.status === "active");
+
+    if (reports.length === 0) {
+      return {
+        ...defaultEmpty,
+        activeExamsCount: activeExams.length,
+        nextStep: {
+          title: "Start Your First Assessment",
+          description: activeExams.length > 0
+            ? `You have ${activeExams.length} active exam${activeExams.length > 1 ? "s" : ""} assigned for Grade ${user.grade || "10"}. Start one today!`
+            : "Complete a diagnostic assessment to build your preparation profile.",
+          actionType: "exam",
+          actionLabel: "Take Assessment",
+        },
+      };
+    }
+
+    // Sort reports chronologically
+    const chronologicalReports = [...reports].sort(
+      (a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime()
+    );
+    const newestReportsFirst = [...reports].sort(
+      (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+    );
+
+    // 1. Overall Performance %
+    const totalPercentageSum = reports.reduce(
+      (sum, r) => sum + (typeof r.percentage === "number" ? r.percentage : Number(r.percentage) || 0),
+      0
+    );
+    const overallPerformance = Math.round(totalPercentageSum / reports.length);
+
+    // 2. Recent Trend calculation
+    let recentTrend: "improving" | "stable" | "declining" | "neutral" = "neutral";
+    if (chronologicalReports.length >= 2) {
+      const recentPcts = chronologicalReports.slice(-3).map((r) => Number(r.percentage) || 0);
+      const first = recentPcts[0];
+      const last = recentPcts[recentPcts.length - 1];
+      if (last - first >= 4) recentTrend = "improving";
+      else if (first - last >= 4) recentTrend = "declining";
+      else recentTrend = "stable";
+    }
+
+    // 3. Latest Assessment
+    const latestRep = newestReportsFirst[0];
+    const latestAssessment = latestRep
+      ? {
+          id: latestRep.id,
+          title: latestRep.examTitle || "Assessment",
+          subject: latestRep.subject || "General",
+          percentage: Number(latestRep.percentage) || 0,
+          accuracy: Number(latestRep.accuracy) || Number(latestRep.percentage) || 0,
+          date: latestRep.createdAt || new Date().toISOString(),
+        }
+      : undefined;
+
+    // 4. Weak Topics Extraction & Deduplication
+    const topicStatsMap = new Map<string, {
+      topic: string;
+      subject: string;
+      totalQuestions: number;
+      correctCount: number;
+      wrongCount: number;
+    }>();
+
+    reports.forEach((rep) => {
+      // From detailed question analysis
+      if (Array.isArray(rep.detailedAnalysis)) {
+        rep.detailedAnalysis.forEach((qa: any) => {
+          const tName = (qa.topic || qa.chapter || "General Concept").trim();
+          if (!tName) return;
+          const key = `${rep.subject || "General"}_${tName}`.toLowerCase();
+          const existing = topicStatsMap.get(key) || {
+            topic: tName,
+            subject: rep.subject || "General",
+            totalQuestions: 0,
+            correctCount: 0,
+            wrongCount: 0,
+          };
+          existing.totalQuestions += 1;
+          if (qa.isCorrect) existing.correctCount += 1;
+          else existing.wrongCount += 1;
+          topicStatsMap.set(key, existing);
+        });
+      }
+
+      // Also parse weakTopicInsights if available
+      if (Array.isArray((rep as any).weakTopicInsights)) {
+        (rep as any).weakTopicInsights.forEach((wt: any) => {
+          const tName = (wt.topic || "").trim();
+          if (!tName) return;
+          const key = `${rep.subject || "General"}_${tName}`.toLowerCase();
+          const existing = topicStatsMap.get(key) || {
+            topic: tName,
+            subject: rep.subject || "General",
+            totalQuestions: wt.totalQuestions || 2,
+            correctCount: wt.correctCount || 0,
+            wrongCount: wt.wrongCount || (wt.totalQuestions || 2) - (wt.correctCount || 0),
+          };
+          topicStatsMap.set(key, existing);
+        });
+      }
+    });
+
+    const weakTopicsList: StudentHomeWeakTopic[] = [];
+    topicStatsMap.forEach((val) => {
+      const acc = val.totalQuestions > 0 ? Math.round((val.correctCount / val.totalQuestions) * 100) : 100;
+      if (acc < 70 && val.wrongCount > 0) {
+        // Find matching resource in available study_resources
+        const match = resources.find((res) => {
+          const resTopic = (res.topic || res.title || "").toLowerCase();
+          const targetTopic = val.topic.toLowerCase();
+          const resSub = (res.subject || "").toLowerCase();
+          const targetSub = val.subject.toLowerCase();
+          return (
+            (resSub.includes(targetSub) || targetSub.includes(resSub)) &&
+            (resTopic.includes(targetTopic) || targetTopic.includes(resTopic))
+          );
+        });
+
+        weakTopicsList.push({
+          topic: val.topic,
+          subject: val.subject,
+          accuracy: acc,
+          totalQuestions: val.totalQuestions,
+          wrongCount: val.wrongCount,
+          recommendedResource: match,
+          suggestionText: match
+            ? `Recommended study material available for ${val.topic}.`
+            : `Review ${val.topic} concepts before your next ${val.subject} assessment.`,
+        });
+      }
+    });
+
+    // Sort weak topics lowest accuracy first
+    weakTopicsList.sort((a, b) => a.accuracy - b.accuracy);
+
+    // 5. Recommended Resources
+    const recommendedResources: StudentHomeResourceRecommendation[] = [];
+    const usedResIds = new Set<string>();
+
+    // Priority 1: Match weak topics
+    weakTopicsList.forEach((wt) => {
+      if (wt.recommendedResource && !usedResIds.has(wt.recommendedResource.id)) {
+        recommendedResources.push({
+          resource: wt.recommendedResource,
+          reason: `Recommended for weak topic: ${wt.topic}`,
+          isWeakTopicMatch: true,
+        });
+        usedResIds.add(wt.recommendedResource.id);
+      }
+    });
+
+    // Priority 2: General grade & subject revision materials
+    resources.forEach((res) => {
+      if (recommendedResources.length < 4 && !usedResIds.has(res.id)) {
+        recommendedResources.push({
+          resource: res,
+          reason: `Curriculum revision for Grade ${res.grade || user.grade || "10"} ${res.subject}`,
+          isWeakTopicMatch: false,
+        });
+        usedResIds.add(res.id);
+      }
+    });
+
+    // 6. Recent Assessments (up to 4)
+    const recentAssessments = newestReportsFirst.slice(0, 4).map((rep, idx, arr) => {
+      const currPct = Number(rep.percentage) || 0;
+      let trend: "up" | "stable" | "down" = "stable";
+      const prev = arr[idx + 1];
+      if (prev) {
+        const prevPct = Number(prev.percentage) || 0;
+        if (currPct - prevPct >= 3) trend = "up";
+        else if (prevPct - currPct >= 3) trend = "down";
+      }
+      return {
+        id: rep.id,
+        title: rep.examTitle || "Diagnostic Test",
+        subject: rep.subject || "General",
+        percentage: currPct,
+        accuracy: Number(rep.accuracy) || currPct,
+        trend,
+        date: rep.createdAt || "",
+      };
+    });
+
+    // 7. Preparation Trend
+    const scores = chronologicalReports.map((r) => Number(r.percentage) || 0);
+    let summaryText = "Your preparation trend will appear here as you complete more assessments.";
+    let isAvailable = scores.length >= 2;
+    if (isAvailable) {
+      if (recentTrend === "improving") {
+        summaryText = "You're improving across recent assessments.";
+      } else if (recentTrend === "declining") {
+        summaryText = "Focus on your recommended topics to reverse the trend.";
+      } else {
+        summaryText = "Your assessment performance is maintaining a steady consistency.";
+      }
+    }
+
+    // 8. Board Prediction Forecast
+    let boardForecast: StudentHomeDashboardData["boardForecast"] = undefined;
+    if (chronologicalReports.length >= 2) {
+      const topSubject = latestRep?.subject || "Mathematics";
+      const subjectReports = chronologicalReports.filter(
+        (r) => (r.subject || "").toLowerCase() === topSubject.toLowerCase()
+      );
+      const targetPool = subjectReports.length >= 2 ? subjectReports : chronologicalReports;
+      const targetPcts = targetPool.map((r) => Number(r.percentage) || 0);
+      const avg = targetPcts.reduce((a, b) => a + b, 0) / targetPcts.length;
+      const lastScore = targetPcts[targetPcts.length - 1];
+      const predicted = Math.round(Math.min(99, Math.max(30, avg * 0.4 + lastScore * 0.6 + 2)));
+
+      boardForecast = {
+        subject: topSubject,
+        predictedPercentage: predicted,
+        rangeMin: Math.max(20, predicted - 4),
+        rangeMax: Math.min(100, predicted + 5),
+        confidence: targetPool.length >= 4 ? "High" : "Medium",
+      };
+    }
+
+    // 9. Single Actionable Next Step
+    let nextStep: StudentHomeDashboardData["nextStep"];
+    if (weakTopicsList.length > 0) {
+      const worst = weakTopicsList[0];
+      if (worst.recommendedResource) {
+        nextStep = {
+          title: `Revise ${worst.topic}`,
+          description: `You scored ${worst.accuracy}% on ${worst.topic} in ${worst.subject}. Recommended study guide is ready.`,
+          actionType: "resource",
+          actionLabel: "Open Study Material",
+          targetId: worst.recommendedResource.id,
+          targetUrl: worst.recommendedResource.url,
+        };
+      } else {
+        nextStep = {
+          title: `Practice ${worst.topic}`,
+          description: `Focus on ${worst.topic} (${worst.accuracy}% accuracy) before your next ${worst.subject} assessment.`,
+          actionType: "practice",
+          actionLabel: "Start Next Assessment",
+        };
+      }
+    } else if (activeExams.length > 0) {
+      nextStep = {
+        title: "Take Next Assessment",
+        description: `Ready to test your readiness? ${activeExams[0].title} is available for Grade ${user.grade || "10"}.`,
+        actionType: "exam",
+        actionLabel: "Take Assessment",
+        targetId: activeExams[0].id,
+      };
+    } else {
+      nextStep = {
+        title: "Explore Study Materials",
+        description: "Review comprehensive curriculum study notes and video lectures to boost mastery.",
+        actionType: "resource",
+        actionLabel: "Open Library",
+      };
+    }
+
+    return {
+      student: user,
+      overallPerformance,
+      recentTrend,
+      latestAssessment,
+      totalCompletedReports: reports.length,
+      activeExamsCount: activeExams.length,
+      weakTopics: weakTopicsList.slice(0, 5),
+      recommendedResources: recommendedResources.slice(0, 4),
+      recentAssessments,
+      preparationTrend: {
+        scores: scores.slice(-6),
+        summaryText,
+        isAvailable,
+      },
+      boardForecast,
+      nextStep,
+    };
+  } catch (error) {
+    console.error("[ZeePrep] Error in getStudentHomeDashboardData:", error);
+    return defaultEmpty;
+  }
+}
+
+export interface TeacherHomeDashboardData {
+  teacher: User;
+  overview: {
+    activeExamsCount: number;
+    submissionsPendingCount: number;
+    reportsAvailableCount: number;
+    questionsCount: number;
+    assignedStudentsCount: number;
+  };
+  activeExams: {
+    id: string;
+    title: string;
+    grade: string;
+    section?: string;
+    subject: string;
+    durationMinutes: number;
+    totalQuestions: number;
+    submissionsCount: number;
+    assignedStudentsCount: number;
+    status: string;
+  }[];
+  submissionsNeedingAttention: {
+    id: string;
+    studentName: string;
+    studentAvatar?: string;
+    grade: string;
+    section?: string;
+    examTitle: string;
+    subject: string;
+    percentage: number;
+    submittedAt: string;
+    needsRemarks: boolean;
+  }[];
+  classPerformanceSnapshot: {
+    grade: string;
+    subject: string;
+    averageAccuracy: number;
+    trendText: string;
+    decliningStudentsCount: number;
+    topPerformerName?: string;
+    topPerformerScore?: number;
+  };
+}
+
+export async function getTeacherHomeDashboardData(teacher: User): Promise<TeacherHomeDashboardData> {
+  const defaultTeacherData: TeacherHomeDashboardData = {
+    teacher,
+    overview: {
+      activeExamsCount: 0,
+      submissionsPendingCount: 0,
+      reportsAvailableCount: 0,
+      questionsCount: 0,
+      assignedStudentsCount: 0,
+    },
+    activeExams: [],
+    submissionsNeedingAttention: [],
+    classPerformanceSnapshot: {
+      grade: teacher.grade ? `Grade ${teacher.grade}` : "Grade 10",
+      subject: teacher.subject || "General Science",
+      averageAccuracy: 0,
+      trendText: "No assessment data submitted yet.",
+      decliningStudentsCount: 0,
+    },
+  };
+
+  if (!teacher || !teacher.uid) return defaultTeacherData;
+
+  try {
+    const [exams, reports, questions] = await Promise.all([
+      getTeacherExams(teacher),
+      getTeacherReports(teacher),
+      getQuestionBank(teacher.subject),
+    ]);
+
+    const activeExamsList = exams.filter(
+      (e) => e.status === "published" || e.status === "active"
+    );
+
+    // Map submissions per exam
+    const submissionsPerExam = new Map<string, number>();
+    reports.forEach((rep) => {
+      if (rep.examId) {
+        submissionsPerExam.set(rep.examId, (submissionsPerExam.get(rep.examId) || 0) + 1);
+      }
+    });
+
+    const activeExamsEnriched = activeExamsList.slice(0, 5).map((e) => ({
+      id: e.id,
+      title: e.title,
+      grade: e.grade || teacher.grade || "10",
+      section: e.section || teacher.section || "All",
+      subject: e.subject || teacher.subject || "General",
+      durationMinutes: e.durationMinutes || 30,
+      totalQuestions: e.questionIds?.length || 15,
+      submissionsCount: submissionsPerExam.get(e.id) || 0,
+      assignedStudentsCount: 35, // standard class cohort
+      status: e.status,
+    }));
+
+    // Submissions needing remarks or review
+    const needingAttention = reports
+      .filter((r) => !r.teacherRemarks || r.percentage < 60)
+      .slice(0, 5)
+      .map((r) => ({
+        id: r.id,
+        studentName: r.studentName || "Student Competitor",
+        studentAvatar: (r as any).avatarUrl || "",
+        grade: r.grade || teacher.grade || "10",
+        section: r.section || "A",
+        examTitle: r.examTitle || "Assessment",
+        subject: r.subject || teacher.subject || "General",
+        percentage: Number(r.percentage) || 0,
+        submittedAt: r.createdAt || new Date().toISOString(),
+        needsRemarks: !r.teacherRemarks,
+      }));
+
+    // Class Performance Snapshot
+    let avgAccuracy = 0;
+    let trendText = "Consistent diagnostic performance";
+    let decliningCount = 0;
+    let topPerformerName: string | undefined = undefined;
+    let topPerformerScore: number | undefined = undefined;
+
+    if (reports.length > 0) {
+      const sum = reports.reduce((s, r) => s + (Number(r.percentage) || 0), 0);
+      avgAccuracy = Math.round(sum / reports.length);
+      decliningCount = reports.filter((r) => (Number(r.percentage) || 0) < 60).length;
+
+      // Find top performer
+      const sortedByScore = [...reports].sort(
+        (a, b) => (Number(b.percentage) || 0) - (Number(a.percentage) || 0)
+      );
+      if (sortedByScore.length > 0) {
+        topPerformerName = sortedByScore[0].studentName;
+        topPerformerScore = Number(sortedByScore[0].percentage) || 0;
+      }
+
+      if (reports.length >= 4) {
+        const half = Math.floor(reports.length / 2);
+        const older = reports.slice(0, half);
+        const newer = reports.slice(half);
+        const oldAvg = older.reduce((s, r) => s + (Number(r.percentage) || 0), 0) / older.length;
+        const newAvg = newer.reduce((s, r) => s + (Number(r.percentage) || 0), 0) / newer.length;
+        const diff = Math.round(newAvg - oldAvg);
+        if (diff > 0) trendText = `↑ ${diff}% improvement across recent attempts`;
+        else if (diff < 0) trendText = `↓ ${Math.abs(diff)}% dip across recent attempts`;
+      }
+    }
+
+    return {
+      teacher,
+      overview: {
+        activeExamsCount: activeExamsList.length,
+        submissionsPendingCount: needingAttention.length,
+        reportsAvailableCount: reports.length,
+        questionsCount: questions.length,
+        assignedStudentsCount: Math.max(35, reports.length),
+      },
+      activeExams: activeExamsEnriched,
+      submissionsNeedingAttention: needingAttention,
+      classPerformanceSnapshot: {
+        grade: teacher.grade ? `Grade ${teacher.grade}` : "Grade 10",
+        subject: teacher.subject || "General Science",
+        averageAccuracy: avgAccuracy,
+        trendText,
+        decliningStudentsCount: decliningCount,
+        topPerformerName,
+        topPerformerScore,
+      },
+    };
+  } catch (err) {
+    console.error("[ZeePrep] Error in getTeacherHomeDashboardData:", err);
+    return defaultTeacherData;
   }
 }
