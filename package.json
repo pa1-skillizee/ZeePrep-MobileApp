@@ -34,6 +34,7 @@
   },
   "devDependencies": {
     "@types/react": "~19.2.2",
+    "basic-ftp": "^6.2.1",
     "typescript": "~6.0.3"
   },
   "scripts": {
@@ -51,6 +52,7 @@
     "web": "expo start --web",
     "build:web": "expo export -p web",
     "deploy:web": "expo export -p web && firebase deploy --only hosting:zeeprep-app",
+    "deploy:hostinger": "node scripts/deploy_hostinger_ftp.mjs",
     "lint": "expo lint"
   },
   "private": true
