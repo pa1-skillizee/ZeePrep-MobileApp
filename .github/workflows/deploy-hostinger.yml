@@ -1,18 +1,18 @@
-name: Deploy Web App to Hostinger FTP
+name: Build and Deploy to Hostinger via FTP
 
 on:
-  workflow_dispatch:
   push:
     branches:
       - master
+      - main
+  workflow_dispatch:
 
 jobs:
-  web-deploy:
-    name: Build and Deploy to Hostinger Subdomain
+  build-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 📥 Checkout Repository
+      - name: 📥 Checkout code
         uses: actions/checkout@v4
 
       - name: ⚙️ Setup Node.js
@@ -21,10 +21,10 @@ jobs:
           node-version: 20
           cache: 'npm'
 
-      - name: 📦 Install Dependencies
-        run: npm ci
+      - name: 📦 Install dependencies
+        run: npm ci --no-audit --no-fund
 
-      - name: 🏗️ Build Expo Web Bundle
+      - name: 🏗️ Build project (Expo Web Export)
         env:
           EXPO_PUBLIC_FIREBASE_API_KEY: ${{ secrets.EXPO_PUBLIC_FIREBASE_API_KEY }}
           EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN: ${{ secrets.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN }}
@@ -33,9 +33,9 @@ jobs:
           EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID }}
           EXPO_PUBLIC_FIREBASE_APP_ID: ${{ secrets.EXPO_PUBLIC_FIREBASE_APP_ID }}
           EXPO_PUBLIC_GEMINI_API_KEY: ${{ secrets.EXPO_PUBLIC_GEMINI_API_KEY }}
-        run: npx expo export -p web
+        run: npm run build:web
 
-      - name: 📄 Create SPA .htaccess Routing
+      - name: 📄 Inject SPA .htaccess Routing
         run: |
           cat << 'EOF' > dist/.htaccess
           <IfModule mod_rewrite.c>
@@ -58,12 +58,27 @@ jobs:
           </IfModule>
           EOF
 
-      - name: 🚀 Sync Files to Hostinger FTP (Isolated Subdomain Directory)
+      - name: 🚀 Upload to Hostinger via FTP
         uses: SamKirkland/FTP-Deploy-Action@v4.3.5
         with:
-          server: ${{ secrets.HOSTINGER_FTP_HOST }}
-          username: ${{ secrets.HOSTINGER_FTP_USER }}
-          password: ${{ secrets.HOSTINGER_FTP_PASSWORD }}
-          server-dir: ${{ secrets.HOSTINGER_FTP_TARGET_DIR }}
+          server: ${{ secrets.FTP_HOST }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          port: 21
+          protocol: ftps
+          security: loose
+          log-level: verbose
           local-dir: ./dist/
+          server-dir: ${{ secrets.FTP_TARGET_DIR }}/
           dangerous-clean-slate: false
+          state-name: .ftp-deploy-sync-state-zeeprep.json
+          timeout: 600000
+          exclude: |
+            SAT/**
+            sat/**
+            sat.skillizee.io/**
+            SAT.skillizee.io/**
+            .ftp-deploy-sync-state-sat.json
+            .ftp-deploy-sync-state-*.json
+            **/*.php
+            **/cgi-bin/**
