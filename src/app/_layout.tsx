@@ -10,6 +10,7 @@ import * as SplashScreen from "expo-splash-screen";
 
 import { MobileWebShell } from "../components/MobileWebShell";
 import { ZeePrepLaunchScreen } from "../components/ZeePrepLaunchScreen";
+import { ZeePrepAlertModal } from "../components/ZeePrepAlertModal";
 
 import { configureScreenSecurity } from "../utils/security-helper";
 
@@ -97,7 +98,7 @@ export default function RootLayout() {
   return (
     <QueryClientProvider client={queryClient}>
       <MobileWebShell>
-        <StatusBar style="dark" />
+        <StatusBar hidden={true} style="dark" />
         {showLaunchAnim ? (
           <ZeePrepLaunchScreen onComplete={() => setShowLaunchAnim(false)} />
         ) : (
@@ -112,6 +113,7 @@ export default function RootLayout() {
             <Stack.Screen name="results/[id]" />
           </Stack>
         )}
+        <ZeePrepAlertModal />
       </MobileWebShell>
     </QueryClientProvider>
   );

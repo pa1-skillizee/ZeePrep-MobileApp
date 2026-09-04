@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>ZeePrep Report — Asha Verma</title>
+<style>
+  @page { size: A4; margin: 14mm; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    color: #0F172A; font-size: 12px; line-height: 1.5; background: #FFFFFF;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  .brandbar { display:flex; justify-content:space-between; align-items:flex-end; border-bottom: 3px solid #4F46E5; padding-bottom: 8px; margin-bottom: 12px; }
+  .brand { font-size: 20px; font-weight: 800; color: #4F46E5; letter-spacing: 0.3px; }
+  .brand small { color:#94A3B8; font-weight:600; font-size:11px; }
+  .gendate { font-size: 10px; color: #94A3B8; text-align:right; }
+  .idcard { display:flex; flex-wrap:wrap; gap: 6px 22px; background:#F8FAFC; border:1px solid #E2E8F0; border-radius:10px; padding:10px 14px; margin-bottom:12px; }
+  .idcard div { font-size: 11px; color:#475569; }
+  .idcard b { color:#0F172A; }
+  .scorebar { display:flex; gap:10px; margin-bottom:12px; }
+  .scorebox { flex:1; border:1px solid #E2E8F0; border-radius:10px; padding:10px; text-align:center; }
+  .scorebox .v { font-size: 20px; font-weight: 800; }
+  .scorebox .l { font-size: 10px; color:#64748B; text-transform:uppercase; letter-spacing:0.4px; }
+  .ok { color:#059669; } .bad { color:#DC2626; } .skip { color:#64748B; }
+  .section { border:1px solid #E2E8F0; border-radius:12px; padding:12px 14px; margin-bottom:12px; break-inside: avoid; page-break-inside: avoid; }
+  .section h2 { font-size: 15px; margin: 0 0 8px; color:#0F172A; }
+  .subsec { margin-top: 8px; break-inside: avoid; page-break-inside: avoid; }
+  .subsec h3 { font-size: 12px; margin: 0 0 4px; text-transform:uppercase; letter-spacing:0.4px; }
+  .c-green{color:#059669}.c-amber{color:#B45309}.c-indigo{color:#4338CA}
+  .cols { display:flex; flex-wrap:wrap; gap: 10px 24px; }
+  .cols .subsec { flex:1; min-width: 200px; }
+  ul.pointers { list-style:none; margin:4px 0; padding:0; }
+  ul.pointers li { position:relative; padding-left:14px; margin:3px 0; break-inside:avoid; page-break-inside:avoid; }
+  ul.pointers li:before { content:""; position:absolute; left:2px; top:6px; width:6px; height:6px; border-radius:50%; background: var(--dot,#4F46E5); }
+  .fc-hero { display:flex; flex-wrap:wrap; gap: 14px 26px; align-items:flex-end; margin-bottom:10px; }
+  .fc-primary .fc-value { font-size: 40px; font-weight: 900; color:#4F46E5; line-height:1; }
+  .fc-label { font-size: 10px; color:#64748B; text-transform:uppercase; letter-spacing:0.5px; }
+  .fc-sv { font-size: 15px; font-weight: 800; }
+  .chart { break-inside: avoid; page-break-inside: avoid; margin: 6px 0; }
+  .legend { display:flex; gap:16px; justify-content:center; font-size:10px; color:#475569; margin-top:4px; }
+  .lg:before{content:"";display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:5px;vertical-align:middle;}
+  .lg-a:before{background:#4F46E5;} .lg-p:before{background:#fff;border:2px solid #F59E0B;} .lg-b:before{background:rgba(245,158,11,0.4);border-radius:2px;}
+  .diag { display:flex; flex-wrap:wrap; gap:6px 18px; background:#0F172A; color:#E2E8F0; border-radius:8px; padding:8px 12px; margin-top:8px; font-size:11px; }
+  .diag b { color:#fff; }
+  table { width:100%; border-collapse: collapse; font-size: 11px; }
+  thead { display: table-header-group; }
+  th { background:#F1F5F9; text-align:left; padding:6px; border-bottom:2px solid #E2E8F0; font-size:10px; text-transform:uppercase; letter-spacing:0.3px; }
+  td { padding:6px; border-bottom:1px solid #F1F5F9; vertical-align:top; }
+  tr { break-inside: avoid; page-break-inside: avoid; }
+  td.qtext { max-width: 300px; }
+  .note { font-size: 10px; color:#94A3B8; margin-top:6px; }
+</style>
+</head>
+<body>
+  <div class="brandbar">
+    <div class="brand">ZeePrep <small>Academic Report</small></div>
+    <div class="gendate">Generated Aug 31, 2026, 05:32 AM</div>
+  </div>
+
+  <div class="idcard">
+    <div><b>Asha Verma</b></div>
+    <div>asha@example.com</div>
+    <div>Subject: <b>Mathematics</b></div>
+    <div>Class 10 · Sec A</div>
+    <div>Exam: <b>Algebra Unit Test</b></div>
+    <div>Attempt #1</div>
+  </div>
+
+  <div class="scorebar">
+    <div class="scorebox"><div class="v">20/32</div><div class="l">Marks</div></div>
+    <div class="scorebox"><div class="v">63%</div><div class="l">Percentage</div></div>
+    <div class="scorebox"><div class="v ok">9</div><div class="l">Correct</div></div>
+    <div class="scorebox"><div class="v bad">5</div><div class="l">Wrong</div></div>
+    <div class="scorebox"><div class="v skip">2</div><div class="l">Skipped</div></div>
+    <div class="scorebox"><div class="v">64%</div><div class="l">Accuracy</div></div>
+  </div>
+
+  
+    <div class="section">
+      <h2>Mathematics — Board Preparation Forecast</h2>
+      <div class="fc-hero">
+        <div class="fc-primary"><div class="fc-label">Predicted Board Score</div><div class="fc-value">73%</div></div>
+        <div class="fc-stat"><div class="fc-label">Likely Range</div><div class="fc-sv">67% – 80%</div></div>
+        <div class="fc-stat"><div class="fc-label">Confidence</div><div class="fc-sv">Medium</div></div>
+        <div class="fc-stat"><div class="fc-label">Trend</div><div class="fc-sv">Improving</div></div>
+      </div>
+      <div class="chart"><svg width="100%" viewBox="0 0 760 300" xmlns="http://www.w3.org/2000/svg" style="max-width:760px">
+    <line x1="44" y1="260" x2="740" y2="260" stroke="#E2E8F0" stroke-width="1"/><text x="36" y="263" font-size="11" fill="#94A3B8" text-anchor="end">0</text><line x1="44" y1="200" x2="740" y2="200" stroke="#E2E8F0" stroke-width="1"/><text x="36" y="203" font-size="11" fill="#94A3B8" text-anchor="end">25</text><line x1="44" y1="140" x2="740" y2="140" stroke="#E2E8F0" stroke-width="1"/><text x="36" y="143" font-size="11" fill="#94A3B8" text-anchor="end">50</text><line x1="44" y1="80" x2="740" y2="80" stroke="#E2E8F0" stroke-width="1"/><text x="36" y="83" font-size="11" fill="#94A3B8" text-anchor="end">75</text><line x1="44" y1="20" x2="740" y2="20" stroke="#E2E8F0" stroke-width="1"/><text x="36" y="23" font-size="11" fill="#94A3B8" text-anchor="end">100</text><polygon points="392,67.99999999999999 740,67.99999999999999 740,99.19999999999999 392,99.19999999999999" fill="rgba(245,158,11,0.14)"/><path d="M 44.0 111.2 L 218.0 96.8 L 392.0 89.6 L 566.0 77.6 L 740.0 84.8" fill="none" stroke="#F59E0B" stroke-width="2.5" stroke-dasharray="6 5" stroke-linecap="round"/><path d="M 44.0 111.2 L 218.0 96.8 L 392.0 89.6 L 566.0 77.6 L 740.0 108.8" fill="none" stroke="#4F46E5" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/><circle cx="44" cy="111.2" r="4" fill="#FFFFFF" stroke="#F59E0B" stroke-width="2"/><circle cx="218" cy="96.79999999999998" r="4" fill="#FFFFFF" stroke="#F59E0B" stroke-width="2"/><circle cx="392" cy="89.60000000000001" r="4" fill="#FFFFFF" stroke="#F59E0B" stroke-width="2"/><circle cx="566" cy="77.6" r="4" fill="#FFFFFF" stroke="#F59E0B" stroke-width="2"/><circle cx="740" cy="84.80000000000001" r="4" fill="#FFFFFF" stroke="#F59E0B" stroke-width="2"/><circle cx="44" cy="111.2" r="4.5" fill="#4F46E5" stroke="#FFFFFF" stroke-width="2"/><circle cx="218" cy="96.79999999999998" r="4.5" fill="#4F46E5" stroke="#FFFFFF" stroke-width="2"/><circle cx="392" cy="89.60000000000001" r="4.5" fill="#4F46E5" stroke="#FFFFFF" stroke-width="2"/><circle cx="566" cy="77.6" r="4.5" fill="#4F46E5" stroke="#FFFFFF" stroke-width="2"/><circle cx="740" cy="108.8" r="4.5" fill="#4F46E5" stroke="#FFFFFF" stroke-width="2"/><text x="44" y="280" font-size="11" fill="#94A3B8" text-anchor="middle">Jan 1</text><text x="218" y="280" font-size="11" fill="#94A3B8" text-anchor="middle">Feb 1</text><text x="392" y="280" font-size="11" fill="#94A3B8" text-anchor="middle">Mar 1</text><text x="566" y="280" font-size="11" fill="#94A3B8" text-anchor="middle">Apr 1</text><text x="740" y="280" font-size="11" fill="#94A3B8" text-anchor="middle">May 1</text>
+  </svg></div>
+      <div class="legend"><span class="lg lg-a">Assessment score</span><span class="lg lg-p">Predicted board</span><span class="lg lg-b">Likely range</span></div>
+      
+      <div class="cols">
+        
+        
+        
+      </div>
+      <div class="subsec"><h3>Why confidence is Medium</h3><ul class="pointers"><li style="--dot:#64748B">5 valid Mathematics assessments completed.</li><li style="--dot:#64748B">4 distinct topics assessed so far.</li></ul></div>
+      <div class="diag">
+            <span><b>5</b> valid assessments</span>
+            <span><b>4</b> topics assessed</span>
+            <span>Breadth <b>62/100</b></span>
+            <span>Volatility <b>5 pts</b></span>
+            <span>Levels <b>L1 12 · L2 10 · L3 6</b></span>
+          </div>
+      <p class="note">This is an estimate based on ZeePrep assessments. It is not a guaranteed board result.</p>
+    </div>
+  <div class="section"><h2>AI Review</h2><div class="cols">
+        <div class="subsec"><h3 style="color:#059669">Doing Well</h3><ul class="pointers"><li style="--dot:#059669">Algebra is a strength — you scored 88% on it this assessment.</li></ul></div>
+        <div class="subsec"><h3 style="color:#B45309">Focus More</h3><ul class="pointers"><li style="--dot:#B45309">Revisit Probability — 3 of your 5 errors this test came from it.</li><li style="--dot:#B45309">Revise Geometry — it is your lowest topic at 45% this assessment.</li></ul></div>
+        <div class="subsec"><h3 style="color:#BE123C">Watch Out</h3><ul class="pointers"><li style="--dot:#BE123C">You spend about 60% longer on Geometry questions — refine your method.</li></ul></div>
+        <div class="subsec"><h3 style="color:#4338CA">Next Step</h3><ul class="pointers"><li style="--dot:#4338CA">Revise Probability using the &quot;Probability Fundamentals Notes&quot; resource before your next assessment.</li><li style="--dot:#4338CA">Attempt a Level 3 Mathematics set to test your board-level readiness.</li></ul></div>
+      </div></div>
+  <div class="section"><h2>Topic Focus Areas</h2><ul class="pointers"><li style="--dot:#F59E0B">Probability</li><li style="--dot:#F59E0B">Geometry</li></ul></div>
+
+  <div class="section">
+    <h2>Question Analysis</h2>
+    <table>
+      <thead><tr><th>#</th><th>Question</th><th>Topic</th><th>Lvl</th><th>Result</th><th>Marks</th></tr></thead>
+      <tbody><tr>
+        <td>1</td>
+        <td class="qtext">Sample question 1 on a topic that may be a little long to test wrapping</td>
+        <td>Algebra</td>
+        <td>L1</td>
+        <td class="ok">Correct</td>
+        <td>2/2</td>
+      </tr><tr>
+        <td>2</td>
+        <td class="qtext">Sample question 2 on a topic that may be a little long to test wrapping</td>
+        <td>Probability</td>
+        <td>L2</td>
+        <td class="bad">Incorrect</td>
+        <td>0/2</td>
+      </tr><tr>
+        <td>3</td>
+        <td class="qtext">Sample question 3 on a topic that may be a little long to test wrapping</td>
+        <td>Geometry</td>
+        <td>L3</td>
+        <td class="bad">Incorrect</td>
+        <td>0/2</td>
+      </tr><tr>
+        <td>4</td>
+        <td class="qtext">Sample question 4 on a topic that may be a little long to test wrapping</td>
+        <td>Trigonometry</td>
+        <td>L1</td>
+        <td class="ok">Correct</td>
+        <td>2/2</td>
+      </tr><tr>
+        <td>5</td>
+        <td class="qtext">Sample question 5 on a topic that may be a little long to test wrapping</td>
+        <td>Algebra</td>
+        <td>L2</td>
+        <td class="bad">Incorrect</td>
+        <td>0/2</td>
+      </tr><tr>
+        <td>6</td>
+        <td class="qtext">Sample question 6 on a topic that may be a little long to test wrapping</td>
+        <td>Probability</td>
+        <td>L3</td>
+        <td class="bad">Incorrect</td>
+        <td>0/2</td>
+      </tr><tr>
+        <td>7</td>
+        <td class="qtext">Sample question 7 on a topic that may be a little long to test wrapping</td>
+        <td>Geometry</td>
+        <td>L1</td>
+        <td class="ok">Correct</td>
+        <td>2/2</td>
+      </tr><tr>
+        <td>8</td>
+        <td class="qtext">Sample question 8 on a topic that may be a little long to test wrapping</td>
+        <td>Trigonometry</td>
+        <td>L2</td>
+        <td class="bad">Incorrect</td>
+        <td>0/2</td>
+      </tr><tr>
+        <td>9</td>
+        <td class="qtext">Sample question 9 on a topic that may be a little long to test wrapping</td>
+        <td>Algebra</td>
+        <td>L3</td>
+        <td class="bad">Incorrect</td>
+        <td>0/2</td>
+      </tr><tr>
+        <td>10</td>
+        <td class="qtext">Sample question 10 on a topic that may be a little long to test wrapping</td>
+        <td>Probability</td>
+        <td>L1</td>
+        <td class="ok">Correct</td>
+        <td>2/2</td>
+      </tr><tr>
+        <td>11</td>
+        <td class="qtext">Sample question 11 on a topic that may be a little long to test wrapping</td>
+        <td>Geometry</td>
+        <td>L2</td>
+        <td class="bad">Incorrect</td>
+        <td>0/2</td>
+      </tr><tr>
+        <td>12</td>
+        <td class="qtext">Sample question 12 on a topic that may be a little long to test wrapping</td>
+        <td>Trigonometry</td>
+        <td>L3</td>
+        <td class="bad">Incorrect</td>
+        <td>0/2</td>
+      </tr><tr>
+        <td>13</td>
+        <td class="qtext">Sample question 13 on a topic that may be a little long to test wrapping</td>
+        <td>Algebra</td>
+        <td>L1</td>
+        <td class="ok">Correct</td>
+        <td>2/2</td>
+      </tr><tr>
+        <td>14</td>
+        <td class="qtext">Sample question 14 on a topic that may be a little long to test wrapping</td>
+        <td>Probability</td>
+        <td>L2</td>
+        <td class="bad">Incorrect</td>
+        <td>0/2</td>
+      </tr><tr>
+        <td>15</td>
+        <td class="qtext">Sample question 15 on a topic that may be a little long to test wrapping</td>
+        <td>Geometry</td>
+        <td>L3</td>
+        <td class="bad">Incorrect</td>
+        <td>0/2</td>
+      </tr><tr>
+        <td>16</td>
+        <td class="qtext">Sample question 16 on a topic that may be a little long to test wrapping</td>
+        <td>Trigonometry</td>
+        <td>L1</td>
+        <td class="ok">Correct</td>
+        <td>2/2</td>
+      </tr></tbody>
+    </table>
+  </div>
+
+  <div class="section"><h2>Time Analysis</h2><div class="scorebar">
+      <div class="scorebox"><div class="v">18m</div><div class="l">Total Time</div></div>
+      <div class="scorebox"><div class="v">69s</div><div class="l">Avg / Question</div></div>
+      <div class="scorebox"><div class="v" style="font-size:13px">Geometry</div><div class="l">Most Time On</div></div>
+    </div></div>
+  <div class="section"><h2>Recommended Resources</h2><ul class="pointers"><li style="--dot:#4F46E5">Probability Fundamentals Notes (PDF)</li></ul></div>
+  <div class="section"><h2>Teacher Remarks</h2><p>Good progress; revise probability.</p></div>
+
+  <p class="note">ZeePrep · Mathematics · Asha Verma · Generated Aug 31, 2026, 05:32 AM</p>
+</body>
+</html>

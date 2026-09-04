@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   View,
   Text,
@@ -19,6 +19,7 @@ import Svg, {
   Stop,
   Path,
   Rect,
+  Circle,
   Polygon,
 } from "react-native-svg";
 import {
@@ -48,10 +49,17 @@ import {
   UserCheck,
   CheckCircle2,
   Clock,
-  Sparkles,
+  BrainCircuit,
   Trash2,
+  ArrowRight,
 } from "lucide-react-native";
 import { AICopilotModal } from "./AICopilotModal";
+import {
+  subscribeToTeacherNotifications,
+  markNotificationAsRead,
+  deleteNotification,
+  type TeacherResourceNotification,
+} from "../services/firestore";
 
 interface WebDesktopShellProps {
   children?: React.ReactNode;
@@ -108,10 +116,10 @@ function ZeePrepLogoSvg({ size = 32 }: { size?: number }) {
           strokeLinecap="round"
           strokeLinejoin="round"
         />
-        <Path
-          d="M392,104 C392,128 408,144 432,144 C408,144 392,160 392,184 C392,160 376,144 352,144 C376,144 392,128 392,104 Z"
-          fill="url(#zpSparkleWeb)"
-        />
+        {/* Golden Academic Distinction Seal */}
+        <Circle cx="392" cy="144" r="22" fill="url(#zpGoldWeb)" />
+        <Circle cx="392" cy="144" r="16" fill="none" stroke="#FFFFFF" strokeWidth="2.5" strokeOpacity={0.8} />
+        <Path d="M386 144 L390 148 L398 140" stroke="#1E1B4B" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
       </Svg>
     </View>
   );
@@ -176,32 +184,79 @@ export function WebDesktopShell({ children }: WebDesktopShellProps) {
   const [viewModeMenuOpen, setViewModeMenuOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
 
-  const [notifications, setNotifications] = useState([
-    {
-      id: "1",
-      title: "Physics Mock Exam Ready",
-      description: "Speed & Motion chapter test is live. 25 questions available.",
-      time: "25m ago",
-      type: "exam",
-      read: false,
-    },
-    {
-      id: "2",
-      title: "AI Weak Area Insight",
-      description: "Recommended practice: Wave Optics & Thermodynamics.",
-      time: "2h ago",
-      type: "ai",
-      read: false,
-    },
-    {
-      id: "3",
-      title: "Study Material Updated",
-      description: "Teacher uploaded Chapter 4 formula sheets & notes.",
-      time: "1d ago",
-      type: "resource",
-      read: true,
-    },
-  ]);
+  const [notifications, setNotifications] = useState<any[]>([]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !user) return;
+    const isTeacherOrAdmin =
+      user.role === "teacher" ||
+      user.role === "admin" ||
+      user.role === "superadmin" ||
+      viewMode === "teacher" ||
+      viewMode === "superadmin";
+
+    if (isTeacherOrAdmin) {
+      const unsub = subscribeToTeacherNotifications(
+        (notifs) => {
+          const formatted = notifs.map((n) => {
+            let relativeTime = "Just now";
+            if (n.createdAt) {
+              const diffMs = Date.now() - new Date(n.createdAt).getTime();
+              const diffMins = Math.floor(diffMs / (1000 * 60));
+              if (diffMins < 1) relativeTime = "Just now";
+              else if (diffMins < 60) relativeTime = `${diffMins}m ago`;
+              else {
+                const diffHours = Math.floor(diffMins / 60);
+                if (diffHours < 24) relativeTime = `${diffHours}h ago`;
+                else relativeTime = `${Math.floor(diffHours / 24)}d ago`;
+              }
+            }
+
+            return {
+              id: n.id,
+              title: n.title || `Resource Request: ${n.topic}`,
+              description:
+                n.message ||
+                `${n.studentName} (Class ${n.grade || "10"}-${n.section || "A"}) requested study material for "${n.topic}" in ${n.subject || "Exam"}.`,
+              time: relativeTime,
+              type: "resource",
+              read: Boolean(n.read),
+              studentName: n.studentName,
+              studentEmail: n.studentEmail,
+              grade: n.grade,
+              section: n.section,
+              subject: n.subject,
+              topic: n.topic,
+            };
+          });
+          setNotifications(formatted);
+        },
+        user.role === "teacher" ? user.subject : undefined,
+        user.role === "teacher" ? user.grade : undefined
+      );
+      return () => unsub();
+    } else {
+      // Default announcements for students
+      setNotifications([
+        {
+          id: "std-1",
+          title: "Exam Portal Active",
+          description: "New diagnostic mock examinations and practice tests are live.",
+          time: "Today",
+          type: "exam",
+          read: true,
+        },
+        {
+          id: "std-2",
+          title: "Study Material Available",
+          description: "Your teachers regularly upload class revision notes and formulas.",
+          time: "1d ago",
+          type: "resource",
+          read: true,
+        },
+      ]);
+    }
+  }, [isAuthenticated, user?.uid, user?.role, user?.subject, user?.grade, viewMode]);
 
   if (Platform.OS !== "web") {
     return <View style={{ flex: 1 }}>{children}</View>;
@@ -242,12 +297,23 @@ export function WebDesktopShell({ children }: WebDesktopShellProps) {
     else router.replace("/(tabs)" as any);
   };
 
-  const markAllNotificationsRead = () => {
+  const markAllNotificationsRead = async () => {
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+    for (const n of notifications) {
+      if (!n.read && n.id) {
+        await markNotificationAsRead(n.id).catch(() => {});
+      }
+    }
   };
 
-  const clearAllNotifications = () => {
+  const clearAllNotifications = async () => {
+    const ids = notifications.map((n) => n.id);
     setNotifications([]);
+    for (const id of ids) {
+      if (id) {
+        await deleteNotification(id).catch(() => {});
+      }
+    }
   };
 
   const unreadCount = notifications.filter((n) => !n.read).length;
@@ -710,7 +776,7 @@ export function WebDesktopShell({ children }: WebDesktopShellProps) {
                           ]}
                         >
                           {item.type === "exam" && <Brain size={16} color="#2563EB" />}
-                          {item.type === "ai" && <Sparkles size={16} color="#9333EA" />}
+                          {item.type === "ai" && <BrainCircuit size={16} color="#9333EA" />}
                           {item.type === "resource" && <BookOpen size={16} color="#059669" />}
                         </View>
                         <View style={{ flex: 1 }}>
@@ -719,6 +785,31 @@ export function WebDesktopShell({ children }: WebDesktopShellProps) {
                             {!item.read && <View style={styles.unreadDot} />}
                           </View>
                           <Text style={styles.notifDesc}>{item.description}</Text>
+                          {item.topic && (user?.role === "teacher" || viewMode === "teacher") ? (
+                            <TouchableOpacity
+                              style={{
+                                marginTop: 8,
+                                flexDirection: "row",
+                                alignItems: "center",
+                                alignSelf: "flex-start",
+                                gap: 5,
+                                backgroundColor: "#EEF2FF",
+                                paddingHorizontal: 10,
+                                paddingVertical: 5,
+                                borderRadius: 6,
+                              }}
+                              onPress={async () => {
+                                if (item.id) await markNotificationAsRead(item.id);
+                                setNotificationsOpen(false);
+                                router.push("/(teacher)/resources" as any);
+                              }}
+                            >
+                              <Text style={{ fontSize: 11, fontWeight: "700", color: "#4F46E5" }}>
+                                Upload Material for "{item.topic}"
+                              </Text>
+                              <ArrowRight size={12} color="#4F46E5" />
+                            </TouchableOpacity>
+                          ) : null}
                           <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 6 }}>
                             <Clock size={11} color="#94A3B8" />
                             <Text style={styles.notifTime}>{item.time}</Text>

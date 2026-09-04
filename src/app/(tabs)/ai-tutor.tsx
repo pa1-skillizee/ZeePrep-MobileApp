@@ -10,7 +10,7 @@ import {
 } from "react-native";
 import { useAuthStore } from "../../stores/auth-store";
 import { ZEEPREP_THEME } from "../../constants/theme";
-import { Bot, Send, Sparkles, BookOpen, CheckCircle2, HelpCircle } from "lucide-react-native";
+import { Bot, Send, BrainCircuit, BookOpen, CheckCircle2, HelpCircle } from "lucide-react-native";
 import { generateAITutorResponse } from "../../services/ai";
 
 interface ChatMessage {
@@ -93,7 +93,7 @@ export default function StudentAITutorScreen() {
           >
             {msg.sender === "ai" ? (
               <View style={styles.aiBadgeRow}>
-                <Sparkles size={12} color={ZEEPREP_THEME.colors.primary} />
+                <BrainCircuit size={13} color={ZEEPREP_THEME.colors.primary} />
                 <Text style={styles.aiBadgeText}>AI TUTOR</Text>
               </View>
             ) : null}

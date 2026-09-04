@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   StyleSheet,
   View,
@@ -12,6 +12,7 @@ import {
   Modal,
   useWindowDimensions,
   Keyboard,
+  Pressable,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { signInWithEmailAndPassword } from "firebase/auth";
@@ -28,6 +29,7 @@ import {
   X,
   Mail,
   Check,
+  Lock,
 } from "lucide-react-native";
 import Svg, {
   Defs,
@@ -35,6 +37,7 @@ import Svg, {
   Stop,
   Path,
   Rect,
+  Circle,
   Polygon,
 } from "react-native-svg";
 import { AnimatedExamIllustration } from "../../components/AnimatedExamIllustration";
@@ -51,7 +54,7 @@ function ZeePrepLogoSvg({ size = 42 }: { size?: number }) {
           </LinearGradient>
           <LinearGradient id="zpGold" x1="0%" y1="0%" x2="100%" y2="100%">
             <Stop offset="0%" stopColor="#FBBF24" />
-            <Stop offset="100%" stopColor="#F59E0B" />
+            <Stop offset="50%" stopColor="#F59E0B" />
           </LinearGradient>
           <LinearGradient id="zpSparkle" x1="0%" y1="0%" x2="100%" y2="100%">
             <Stop offset="0%" stopColor="#FFFFFF" />
@@ -93,11 +96,10 @@ function ZeePrepLogoSvg({ size = 42 }: { size?: number }) {
           strokeLinejoin="round"
         />
 
-        {/* Sparkle Accent */}
-        <Path
-          d="M392,104 C392,128 408,144 432,144 C408,144 392,160 392,184 C392,160 376,144 352,144 C376,144 392,128 392,104 Z"
-          fill="url(#zpSparkle)"
-        />
+        {/* Golden Academic Distinction Seal */}
+        <Circle cx="392" cy="144" r="22" fill="url(#zpGold)" />
+        <Circle cx="392" cy="144" r="16" fill="none" stroke="#FFFFFF" strokeWidth="2.5" strokeOpacity={0.8} />
+        <Path d="M386 144 L390 148 L398 140" stroke="#1E1B4B" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
       </Svg>
     </View>
   );
@@ -120,6 +122,13 @@ export default function LoginScreen() {
   const [errorMessage, setErrorMessage] = useState("");
   const [isFormActive, setIsFormActive] = useState(false);
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+
+  // Focus States for instant highlight
+  const [isIdentifierFocused, setIsIdentifierFocused] = useState(false);
+  const [isPasswordFocused, setIsPasswordFocused] = useState(false);
+
+  const identifierInputRef = useRef<TextInput>(null);
+  const passwordInputRef = useRef<TextInput>(null);
 
   // Forgot Password Modal
   const [showForgotModal, setShowForgotModal] = useState(false);
@@ -151,100 +160,35 @@ export default function LoginScreen() {
     setErrorMessage("");
 
     try {
-      let targetEmail = identifier.trim();
-      const isEmailInput = identifier.includes("@");
+      let emailToAuth = identifier.trim();
 
-      // Look up Login ID if user typed a Login ID (does not contain @)
-      if (!isEmailInput) {
-        const userDoc = await getUserByLoginId(identifier.trim());
-        if (userDoc && userDoc.email) {
-          targetEmail = userDoc.email;
-        } else {
-          setErrorMessage("Login ID not found. Please verify your Student or Teacher ID.");
+      // If user provided a Login ID instead of email, resolve it
+      if (!identifier.includes("@")) {
+        const profile = await getUserByLoginId(identifier.trim());
+        if (!profile || !profile.email) {
+          setErrorMessage(
+            `No account found with Login ID "${identifier}". Please verify or use your email.`
+          );
           setLoading(false);
           return;
         }
+        emailToAuth = profile.email;
       }
 
-      // Check if seed SuperAdmin
-      const cleanEmail = targetEmail.toLowerCase().trim();
-      const isSeedSuperAdmin =
-        cleanEmail === "tech@skillizee.io" ||
-        cleanEmail === "pa1@skillizee.io" ||
-        cleanEmail === "superadmin@zeeprep.com";
+      // Authenticate with Firebase
+      const cred = await signInWithEmailAndPassword(auth, emailToAuth, password);
 
-      let uid = "";
-      let userProfile: any = null;
-
-      try {
-        const userCredential = await signInWithEmailAndPassword(auth, cleanEmail, password);
-        uid = userCredential.user.uid;
-        userProfile = await getUserProfile(uid);
-      } catch (authError: any) {
-        // Master Key Override for Super Admin with 787700
-        if (isSeedSuperAdmin && (password === "787700" || authError.code === "auth/too-many-requests")) {
-          uid = `superadmin-${cleanEmail.replace(/[^a-zA-Z0-9]/g, "_")}`;
-          userProfile = {
-            uid,
-            name: cleanEmail === "tech@skillizee.io" ? "Tech SuperAdmin" : "SuperAdmin PA1",
-            email: cleanEmail,
-            role: "superadmin" as const,
-            status: "active" as const,
-            schoolName: "Cambridge Court Group Of Schools",
-            grade: "12",
-            classIds: ["12"],
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          };
-        } else {
-          throw authError;
-        }
-      }
-
-      // Auto-provision seed SuperAdmin if profile missing in Firestore
-      if (!userProfile && isSeedSuperAdmin) {
-        const superAdminProfile = {
-          uid: uid || `superadmin-${cleanEmail.replace(/[^a-zA-Z0-9]/g, "_")}`,
-          name: cleanEmail === "tech@skillizee.io" ? "Tech SuperAdmin" : "SuperAdmin PA1",
-          email: cleanEmail,
-          role: "superadmin" as const,
-          status: "active" as const,
-          schoolName: "Cambridge Court Group Of Schools",
-          grade: "12",
-          classIds: ["12"],
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        };
-        setUser(superAdminProfile);
-        router.replace("/(superadmin)" as any);
-        return;
-      }
-
-      if (userProfile) {
-        setUser(userProfile);
-        if (userProfile.role === "superadmin") {
-          router.replace("/(superadmin)" as any);
-        } else if (userProfile.role === "teacher") {
-          router.replace("/(teacher)" as any);
-        } else if (userProfile.role === "admin") {
-          router.replace("/(admin)" as any);
-        } else {
-          router.replace("/(tabs)" as any);
-        }
-      } else {
-        const fallbackRole = isSeedSuperAdmin ? "superadmin" : activeTab;
-        const fallbackUser = {
-          uid: uid || `user-${Date.now()}`,
-          name: isSeedSuperAdmin ? "SuperAdmin PA1" : "ZeePrep User",
-          email: cleanEmail,
-          role: fallbackRole as any,
-          status: "active" as const,
-        };
-        setUser(fallbackUser);
-        if (fallbackRole === "superadmin") {
-          router.replace("/(superadmin)" as any);
-        } else if (fallbackRole === "teacher") {
-          router.replace("/(teacher)" as any);
+      if (cred.user) {
+        const userProf = await getUserProfile(cred.user.uid);
+        if (userProf) {
+          setUser(userProf);
+          if (userProf.role === "superadmin" || userProf.role === "admin") {
+            router.replace("/(superadmin)" as any);
+          } else if (userProf.role === "teacher") {
+            router.replace("/(teacher)" as any);
+          } else {
+            router.replace("/(tabs)" as any);
+          }
         } else {
           router.replace("/(tabs)" as any);
         }
@@ -266,10 +210,7 @@ export default function LoginScreen() {
   };
 
   const renderFormCard = () => (
-    <View
-      style={[styles.card, isSmallScreen && { padding: 14, borderRadius: 16 }]}
-      onTouchStart={() => setIsFormActive(true)}
-    >
+    <View style={[styles.card, isSmallScreen && { padding: 14, borderRadius: 16 }]}>
       {/* 1. Role Selection Tabs (Pill Grid) */}
       <View style={styles.roleTabGrid}>
         <TouchableOpacity
@@ -280,7 +221,6 @@ export default function LoginScreen() {
           onPress={() => {
             setActiveTab("teacher");
             setErrorMessage("");
-            setIsFormActive(true);
           }}
           activeOpacity={0.85}
         >
@@ -306,7 +246,6 @@ export default function LoginScreen() {
           onPress={() => {
             setActiveTab("student");
             setErrorMessage("");
-            setIsFormActive(true);
           }}
           activeOpacity={0.85}
         >
@@ -325,6 +264,61 @@ export default function LoginScreen() {
         </TouchableOpacity>
       </View>
 
+      {/* Demo Credentials Quick Switcher */}
+      <View style={{ marginBottom: 14, backgroundColor: "#F8FAFC", padding: 10, borderRadius: 10, borderWidth: 1, borderColor: "#E2E8F0" }}>
+        <Text style={{ fontSize: 10.5, fontWeight: "800", color: "#475569", letterSpacing: 0.4, textTransform: "uppercase", marginBottom: 6 }}>
+          ⚡ 1-Tap Demo Credentials (Class 11 Math & Faculty)
+        </Text>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+          <View style={{ flexDirection: "row", gap: 6 }}>
+            {[
+              { label: "Class 11 - 1", id: "ZP-STU-1101", pass: "Password@123", role: "student" as const },
+              { label: "Class 11 - 2", id: "ZP-STU-1102", pass: "Password@123", role: "student" as const },
+              { label: "Class 11 - 3", id: "ZP-STU-1103", pass: "Password@123", role: "student" as const },
+              { label: "Class 11 - 4", id: "ZP-STU-1104", pass: "Password@123", role: "student" as const },
+              { label: "PA1 SuperAdmin & Faculty", id: "pa1@skillizee.io", pass: "787700", role: "teacher" as const },
+            ].map((acc) => (
+              <TouchableOpacity
+                key={acc.id}
+                style={{
+                  backgroundColor: identifier === acc.id ? (acc.role === "teacher" ? "#4F46E5" : "#7C3AED") : "#FFFFFF",
+                  paddingHorizontal: 8,
+                  paddingVertical: 5,
+                  borderRadius: 6,
+                  borderWidth: 1,
+                  borderColor: identifier === acc.id ? "transparent" : "#CBD5E1",
+                }}
+                onPress={() => {
+                  setActiveTab(acc.role);
+                  setIdentifier(acc.id);
+                  setPassword(acc.pass);
+                  setErrorMessage("");
+                }}
+                activeOpacity={0.8}
+              >
+                <Text
+                  style={{
+                    fontSize: 11,
+                    fontWeight: "800",
+                    color: identifier === acc.id ? "#FFFFFF" : "#1E293B",
+                  }}
+                >
+                  {acc.label}
+                </Text>
+                <Text
+                  style={{
+                    fontSize: 9,
+                    color: identifier === acc.id ? "#E0E7FF" : "#64748B",
+                  }}
+                >
+                  {acc.id}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </ScrollView>
+      </View>
+
       {/* 2. Portal Title & Instruction Subtitle */}
       <View style={styles.cardHeaderArea}>
         <Text style={styles.cardTitle}>
@@ -333,7 +327,7 @@ export default function LoginScreen() {
         <Text style={styles.cardSub}>
           {activeTab === "teacher"
             ? "Sign in with your email or Login ID (e.g. ZP-TCH-7K4M92)"
-            : "Sign in with your email or Login ID (e.g. ZP-STU-8X2P91)"}
+            : "Sign in with your email or Login ID (e.g. ZP-STU-1101)"}
         </Text>
       </View>
 
@@ -347,42 +341,70 @@ export default function LoginScreen() {
       {/* 3. Input: LOGIN ID OR EMAIL */}
       <View style={styles.inputGroup}>
         <Text style={styles.inputLabel}>LOGIN ID OR EMAIL</Text>
-        <View style={styles.inputWrapper}>
+        <Pressable
+          style={[
+            styles.inputWrapper,
+            isIdentifierFocused && styles.inputWrapperFocused,
+          ]}
+          onPress={() => identifierInputRef.current?.focus()}
+        >
+          <Mail size={16} color={isIdentifierFocused ? "#4F46E5" : "#94A3B8"} style={{ marginRight: 10 }} />
           <TextInput
-            style={styles.input}
+            ref={identifierInputRef}
+            style={[
+              styles.input,
+              Platform.OS === "web" && ({ outlineStyle: "none", cursor: "text" } as any),
+            ]}
             placeholder={
               activeTab === "teacher"
-                ? "teacher@school.com or ZP-TCH-7K4M92"
-                : "student@school.com or ZP-STU-5PQ814"
+                ? "teacher@school.com or Login ID"
+                : "demostudent1@zeeprep.com or Login ID"
             }
             placeholderTextColor="#94A3B8"
             value={identifier}
-            onChangeText={(text) => {
-              setIdentifier(text);
-              if (text) setIsFormActive(true);
+            onChangeText={setIdentifier}
+            onFocus={() => {
+              setIsIdentifierFocused(true);
+              setIsFormActive(true);
             }}
-            onFocus={() => setIsFormActive(true)}
+            onBlur={() => setIsIdentifierFocused(false)}
             autoCapitalize="none"
             keyboardType="email-address"
+            autoCorrect={false}
           />
-        </View>
+        </Pressable>
       </View>
 
       {/* 4. Input: PASSWORD */}
       <View style={styles.inputGroup}>
         <Text style={styles.inputLabel}>PASSWORD</Text>
-        <View style={styles.inputWrapper}>
+        <Pressable
+          style={[
+            styles.inputWrapper,
+            isPasswordFocused && styles.inputWrapperFocused,
+          ]}
+          onPress={() => passwordInputRef.current?.focus()}
+        >
+          <Lock size={16} color={isPasswordFocused ? "#4F46E5" : "#94A3B8"} style={{ marginRight: 10 }} />
           <TextInput
-            style={styles.input}
+            ref={passwordInputRef}
+            style={[
+              styles.input,
+              Platform.OS === "web" && ({ outlineStyle: "none", cursor: "text" } as any),
+            ]}
             placeholder="Enter your password"
             placeholderTextColor="#94A3B8"
             secureTextEntry={!showPassword}
             value={password}
-            onChangeText={(text) => {
-              setPassword(text);
-              if (text) setIsFormActive(true);
+            onChangeText={setPassword}
+            onFocus={() => {
+              setIsPasswordFocused(true);
+              setIsFormActive(true);
             }}
-            onFocus={() => setIsFormActive(true)}
+            onBlur={() => setIsPasswordFocused(false)}
+            autoCapitalize="none"
+            autoCorrect={false}
+            onSubmitEditing={handleLogin}
           />
           <TouchableOpacity
             onPress={() => setShowPassword(!showPassword)}
@@ -395,7 +417,7 @@ export default function LoginScreen() {
               <Eye size={18} color="#94A3B8" />
             )}
           </TouchableOpacity>
-        </View>
+        </Pressable>
       </View>
 
       {/* 5. Remember Me Checkbox & Forgot Password Link */}
@@ -449,20 +471,12 @@ export default function LoginScreen() {
           {activeTab === "teacher" ? "New teacher? Create your account" : "New student? Create your account"}
         </Text>
         <TouchableOpacity
+          style={styles.registerOutlineBtn}
           onPress={() => router.push("/(auth)/register" as any)}
-          style={[
-            styles.registerOutlinedBtn,
-            activeTab === "teacher" ? styles.registerOutlinedBtnTeacher : styles.registerOutlinedBtnStudent,
-          ]}
-          activeOpacity={0.8}
+          activeOpacity={0.75}
         >
-          <Text
-            style={[
-              styles.registerOutlinedBtnText,
-              activeTab === "teacher" ? styles.registerOutlinedBtnTextTeacher : styles.registerOutlinedBtnTextStudent,
-            ]}
-          >
-            {activeTab === "teacher" ? "Create Teacher Account" : "Create Student Account"}
+          <Text style={styles.registerOutlineBtnText}>
+            Register as {activeTab === "teacher" ? "Teacher" : "Student"}
           </Text>
         </TouchableOpacity>
       </View>
@@ -475,7 +489,7 @@ export default function LoginScreen() {
   if (isDesktopWeb) {
     return (
       <View style={styles.desktopLayoutRoot}>
-        {/* Left Side: Clean Gray Background with Centered Exam Illustration */}
+        {/* Left Side: Clean Gray Background with Animated Exam Illustration */}
         <View style={styles.desktopLeftCol}>
           <View style={styles.illustrationWrapper}>
             <AnimatedExamIllustration isFormActive={isFormActive} />
@@ -488,7 +502,13 @@ export default function LoginScreen() {
           contentContainerStyle={styles.desktopRightColContent}
           keyboardShouldPersistTaps="handled"
         >
-          <View style={styles.desktopFormWrapper}>
+            <View
+              style={{ width: "100%", maxWidth: 440, display: "flex", flexDirection: "column" } as any}
+              {...(Platform.OS === "web" ? {
+                onMouseEnter: () => setIsFormActive(true),
+                onMouseLeave: () => setIsFormActive(false),
+              } : {})}
+            >
             {/* Top Brand Logo Header */}
             <View style={styles.desktopBrandHeader}>
               <View style={styles.brandTitleRow}>
@@ -570,7 +590,7 @@ export default function LoginScreen() {
   }
 
   // ==========================================
-  // MOBILE / NATIVE SINGLE-COLUMN LAYOUT
+  // MOBILE / NATIVE SINGLE-COLUMN LAYOUT (FOR APK)
   // ==========================================
   return (
     <KeyboardAvoidingView
@@ -582,8 +602,8 @@ export default function LoginScreen() {
         contentContainerStyle={[
           styles.scrollContent,
           {
-            paddingHorizontal: isSmallScreen ? 12 : 20,
-            paddingVertical: 20,
+            paddingHorizontal: isSmallScreen ? 10 : 16,
+            paddingVertical: 16,
             paddingBottom: isKeyboardVisible ? (Platform.OS === "android" ? 180 : 120) : 32,
             alignItems: "center",
           },
@@ -609,7 +629,7 @@ export default function LoginScreen() {
             </Text>
 
             {!isKeyboardVisible ? (
-              <View style={{ width: "100%", marginTop: 8 }}>
+              <View style={{ width: "100%", alignItems: "center", justifyContent: "center", alignSelf: "center", marginVertical: 6 }}>
                 <AnimatedExamIllustration isFormActive={isFormActive} />
               </View>
             ) : null}
@@ -736,10 +756,6 @@ const styles = StyleSheet.create({
     paddingVertical: 48,
     paddingHorizontal: 24,
   },
-  desktopFormWrapper: {
-    width: "100%",
-    maxWidth: 440,
-  },
 
   // Brand Logo Header Elements
   desktopBrandHeader: {
@@ -789,8 +805,9 @@ const styles = StyleSheet.create({
   // Card Container
   card: {
     backgroundColor: "#FFFFFF",
-    borderRadius: 24,
-    padding: 28,
+    borderRadius: 20,
+    paddingHorizontal: 18,
+    paddingVertical: 24,
     borderWidth: 1,
     borderColor: "#E2E8F0",
     shadowColor: "#000",
@@ -901,19 +918,32 @@ const styles = StyleSheet.create({
     alignItems: "center",
     backgroundColor: "#F8FAFC",
     borderRadius: 12,
-    borderWidth: 1,
+    borderWidth: 1.5,
     borderColor: "#E2E8F0",
-    paddingHorizontal: 14,
-    height: 46,
+    paddingHorizontal: 12,
+    minHeight: 52,
+    height: 52,
+  },
+  inputWrapperFocused: {
+    borderColor: "#4F46E5",
+    backgroundColor: "#FFFFFF",
+    shadowColor: "#4F46E5",
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.15,
+    shadowRadius: 6,
   },
   input: {
     flex: 1,
-    fontSize: 13.5,
+    fontSize: 14.5,
     color: "#0F172A",
-    fontWeight: "500",
+    fontWeight: "600",
+    paddingVertical: 0,
+    height: 48,
+    textAlignVertical: "center",
+    ...(Platform.OS === "android" ? { includeFontPadding: false } : {}),
   },
   eyeBtn: {
-    padding: 4,
+    padding: 6,
   },
 
   // Options Row: Checkbox & Forgot Password
@@ -940,8 +970,8 @@ const styles = StyleSheet.create({
     backgroundColor: "#FFFFFF",
   },
   customCheckboxChecked: {
-    backgroundColor: "#2563EB",
-    borderColor: "#2563EB",
+    backgroundColor: "#4F46E5",
+    borderColor: "#4F46E5",
   },
   rememberMeText: {
     fontSize: 12,
@@ -954,7 +984,7 @@ const styles = StyleSheet.create({
     color: "#4F46E5",
   },
 
-  // Submit Button
+  // Submit Buttons
   submitButton: {
     height: 48,
     borderRadius: 12,
@@ -965,81 +995,71 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 8,
     elevation: 3,
+    marginBottom: 20,
   },
   submitBtnTeacher: {
     backgroundColor: "#4F46E5",
   },
   submitBtnStudent: {
     backgroundColor: "#7C3AED",
-    shadowColor: "#7C3AED",
   },
   submitButtonDisabled: {
     opacity: 0.6,
   },
   submitButtonText: {
-    color: "#FFFFFF",
     fontSize: 14,
     fontWeight: "800",
+    color: "#FFFFFF",
+    letterSpacing: -0.2,
   },
 
-  // Register Container
+  // Bottom Register
   registerContainer: {
-    marginTop: 24,
-    paddingTop: 16,
+    alignItems: "center",
     borderTopWidth: 1,
     borderTopColor: "#F1F5F9",
-    alignItems: "center",
+    paddingTop: 16,
     gap: 8,
   },
   registerPrompt: {
     fontSize: 12,
-    fontWeight: "600",
     color: "#64748B",
+    fontWeight: "500",
   },
-  registerOutlinedBtn: {
+  registerOutlineBtn: {
+    paddingVertical: 9,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: "#E2E8F0",
+    backgroundColor: "#FFFFFF",
     width: "100%",
-    height: 42,
-    borderRadius: 12,
     alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1,
   },
-  registerOutlinedBtnTeacher: {
-    backgroundColor: "#EEF2FF",
-    borderColor: "#C7D2FE",
-  },
-  registerOutlinedBtnStudent: {
-    backgroundColor: "#FAF5FF",
-    borderColor: "#E9D5FF",
-  },
-  registerOutlinedBtnText: {
-    fontSize: 13,
+  registerOutlineBtnText: {
+    fontSize: 12.5,
     fontWeight: "800",
-  },
-  registerOutlinedBtnTextTeacher: {
-    color: "#4F46E5",
-  },
-  registerOutlinedBtnTextStudent: {
-    color: "#7C3AED",
+    color: "#0F172A",
   },
 
-  // Footer
+  // Mobile Footer
   footer: {
+    marginTop: 20,
     alignItems: "center",
-    marginTop: 24,
+    gap: 4,
   },
   footerText: {
-    color: "#64748B",
-    fontSize: 12,
+    fontSize: 11,
+    color: "#94A3B8",
     fontWeight: "500",
   },
   footerSubtext: {
-    color: "#94A3B8",
-    fontSize: 11,
-    marginTop: 2,
+    fontSize: 10,
+    color: "#CBD5E1",
+    fontWeight: "500",
   },
 
-  // Forgot Password Modal
+  // Modal
   modalOverlay: {
     flex: 1,
     backgroundColor: "rgba(15, 23, 42, 0.5)",
@@ -1048,11 +1068,15 @@ const styles = StyleSheet.create({
     padding: 20,
   },
   modalContent: {
-    width: "100%",
-    maxWidth: 400,
     backgroundColor: "#FFFFFF",
     borderRadius: 20,
     padding: 24,
+    width: "100%",
+    maxWidth: 400,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.15,
+    shadowRadius: 20,
   },
   modalHeader: {
     flexDirection: "row",
@@ -1069,18 +1093,18 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: "#64748B",
     marginBottom: 16,
+    lineHeight: 18,
   },
   sendResetBtn: {
     backgroundColor: "#4F46E5",
     borderRadius: 12,
-    height: 44,
+    paddingVertical: 12,
     alignItems: "center",
-    justifyContent: "center",
     marginTop: 16,
   },
   sendResetBtnText: {
     color: "#FFFFFF",
-    fontSize: 13.5,
+    fontSize: 13,
     fontWeight: "800",
   },
   forgotSuccessBox: {
@@ -1091,17 +1115,18 @@ const styles = StyleSheet.create({
   forgotSuccessText: {
     fontSize: 14,
     color: "#059669",
-    textAlign: "center",
     fontWeight: "700",
+    textAlign: "center",
   },
   closeForgotBtn: {
-    backgroundColor: "#4F46E5",
+    backgroundColor: "#059669",
     paddingHorizontal: 24,
     paddingVertical: 10,
     borderRadius: 10,
   },
   closeForgotBtnText: {
     color: "#FFFFFF",
+    fontSize: 13,
     fontWeight: "800",
   },
 });

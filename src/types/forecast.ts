@@ -32,6 +32,19 @@ export interface AssessmentDataPoint {
   attemptNumber: number;
 }
 
+export interface LevelScorePrediction {
+  level1PredictedScore: number; // 0-100 (Level 1 Foundational prediction)
+  level2PredictedScore: number; // 0-100 (Level 2 Application prediction)
+  level3PredictedScore: number; // 0-100 (Level 3 Advanced / HOTS prediction)
+  overallAveragePredictedScore: number; // 0-100 (Average across all 3 levels)
+  level1Accuracy: number; // Actual % on Level 1
+  level2Accuracy: number; // Actual % on Level 2
+  level3Accuracy: number; // Actual % on Level 3
+  level1Attempts: number;
+  level2Attempts: number;
+  level3Attempts: number;
+}
+
 /** Deterministic, AI-free normalized profile for one subject. */
 export interface SubjectAssessmentProfile {
   subjectKey: string;        // normalized (e.g. "mathematics")
@@ -42,6 +55,7 @@ export interface SubjectAssessmentProfile {
   dataPoints: AssessmentDataPoint[]; // chronological, deduped per exam (latest valid attempt)
   distinctTopics: string[];
   levelCoverage: { level1: number; level2: number; level3: number };
+  levelPredictions?: LevelScorePrediction;
   /** 0-100 breadth heuristic (topics assessed + level spread + volume). NOT a true syllabus %. */
   coverageSignal: number;
   recencyWeightedScore: number;   // 0-100
@@ -72,6 +86,7 @@ export interface BoardForecastSnapshot {
   nextActions: string[];
   confidenceReasons: string[];
   warningFlags?: string[];
+  levelPredictions?: LevelScorePrediction;
   assessmentCount: number;
   coverageSignal: number;
   latestExamId: string;

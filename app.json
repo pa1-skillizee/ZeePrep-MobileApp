@@ -24,6 +24,16 @@
         "android.permission.INTERNET"
       ]
     },
+    "androidStatusBar": {
+      "barStyle": "dark-content",
+      "backgroundColor": "#00000000",
+      "translucent": true
+    },
+    "androidNavigationBar": {
+      "visible": "immersive",
+      "barStyle": "dark-content",
+      "backgroundColor": "#00000000"
+    },
     "web": {
       "output": "static",
       "favicon": "./assets/images/favicon.png"

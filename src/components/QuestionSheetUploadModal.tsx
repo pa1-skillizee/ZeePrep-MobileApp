@@ -13,6 +13,7 @@ import {
 import { parseQuestionSheet, type SheetValidationResult, type ParsedQuestionRow } from "../utils/question-sheet-importer";
 import { addQuestionToBank } from "../services/firestore";
 import { useAuthStore } from "../stores/auth-store";
+import { showZeeAlert } from "../stores/alert-store";
 import { ZEEPREP_THEME } from "../constants/theme";
 import {
   X,
@@ -21,7 +22,6 @@ import {
   AlertTriangle,
   FileSpreadsheet,
   HelpCircle,
-  Sparkles,
 } from "lucide-react-native";
 
 interface Props {
@@ -46,7 +46,7 @@ export function QuestionSheetUploadModal({ visible, onClose, onSuccess }: Props)
 
   const handleValidateSheet = () => {
     if (!sheetText.trim()) {
-      Alert.alert("Empty Sheet", "Please paste or enter question sheet text before validating.");
+      showZeeAlert("Empty Sheet", "Please paste or enter question sheet text before validating.", [{ text: "OK" }], "warning");
       return;
     }
 
@@ -57,7 +57,7 @@ export function QuestionSheetUploadModal({ visible, onClose, onSuccess }: Props)
 
   const handleConfirmImport = async () => {
     if (!validationResult || validationResult.validCount === 0) {
-      Alert.alert("No Valid Questions", "There are no valid questions ready to be imported.");
+      showZeeAlert("No Valid Questions", "There are no valid questions ready to be imported.", [{ text: "OK" }], "warning");
       return;
     }
 
@@ -89,13 +89,15 @@ export function QuestionSheetUploadModal({ visible, onClose, onSuccess }: Props)
       setStep("input");
       setValidationResult(null);
       onClose();
-      Alert.alert(
+      showZeeAlert(
         "Import Successful",
-        `Successfully imported ${imported} questions with Total Marks: ${validationResult.totalMarks}.`
+        `Successfully imported ${imported} questions with Total Marks: ${validationResult.totalMarks}.`,
+        [{ text: "OK" }],
+        "success"
       );
     } catch (err) {
       console.error("Bulk question import error:", err);
-      Alert.alert("Import Failed", "An error occurred while publishing questions to Firestore.");
+      showZeeAlert("Import Failed", "An error occurred while publishing questions to Firestore.", [{ text: "OK" }], "error");
     } finally {
       setImporting(false);
     }
@@ -137,7 +139,7 @@ export function QuestionSheetUploadModal({ visible, onClose, onSuccess }: Props)
                 style={styles.sampleTemplateBtn}
                 onPress={() => setSheetText(SAMPLE_CSV_TEMPLATE)}
               >
-                <Sparkles size={14} color="#D97706" />
+                <FileSpreadsheet size={15} color="#D97706" />
                 <Text style={styles.sampleTemplateText}>Load Sample CSV Template with Marks</Text>
               </TouchableOpacity>
 

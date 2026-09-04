@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import {
   StyleSheet,
   View,
@@ -6,47 +6,163 @@ import {
   ScrollView,
   TouchableOpacity,
   Alert,
+  Image,
+  ActivityIndicator,
+  Modal,
+  Platform,
 } from "react-native";
 import { useRouter } from "expo-router";
+import * as DocumentPicker from "expo-document-picker";
 import { useAuthStore } from "../../stores/auth-store";
+import { showZeeAlert } from "../../stores/alert-store";
 import { signOut } from "firebase/auth";
 import { auth } from "../../lib/firebase";
+import { updateUserProfilePhoto, removeUserProfilePhoto } from "../../services/firestore";
 import { ZEEPREP_THEME } from "../../constants/theme";
-import { GraduationCap, LogOut, ChevronRight, BookOpen, ShieldCheck } from "lucide-react-native";
+import {
+  GraduationCap,
+  LogOut,
+  ChevronRight,
+  ShieldCheck,
+  Camera,
+  Trash2,
+  Globe,
+  Clock,
+  CheckCircle2,
+  X,
+  Upload,
+} from "lucide-react-native";
 import { useResponsive } from "../../hooks/useResponsive";
+
+const AVATAR_PRESETS = [
+  "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80",
+  "https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=200&auto=format&fit=crop&q=80",
+  "https://images.unsplash.com/photo-1517841905240-472988babdf9?w=200&auto=format&fit=crop&q=80",
+  "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&auto=format&fit=crop&q=80",
+  "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=200&auto=format&fit=crop&q=80",
+  "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=200&auto=format&fit=crop&q=80",
+];
 
 export default function StudentProfileScreen() {
   const router = useRouter();
-  const { user, logout } = useAuthStore();
+  const { user, setUser, logout } = useAuthStore();
   const responsive = useResponsive();
 
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [photoPickerVisible, setPhotoPickerVisible] = useState(false);
+
   const handleLogout = () => {
-    Alert.alert("Sign Out", "Are you sure you want to sign out of ZeePrep Mobile?", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Sign Out",
-        style: "destructive",
-        onPress: async () => {
-          try {
-            await signOut(auth);
-          } catch (e) {
-            console.error("Firebase SignOut error:", e);
-          }
-          logout();
-          router.replace("/(auth)/login");
+    showZeeAlert(
+      "Sign Out",
+      "Are you sure you want to sign out of ZeePrep Mobile?",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Sign Out",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await signOut(auth);
+            } catch (e) {
+              console.error("Firebase SignOut error:", e);
+            }
+            logout();
+            router.replace("/(auth)/login");
+          },
         },
-      },
-    ]);
+      ],
+      "warning"
+    );
   };
 
+  const handlePickDeviceImage = async () => {
+    setPhotoPickerVisible(false);
+    if (!user) return;
+
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: ["image/*"],
+        copyToCacheDirectory: true,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const file = result.assets[0];
+        setUploadingPhoto(true);
+        const res = await updateUserProfilePhoto(user.uid, file.uri);
+        if (res.success && res.photoUrl) {
+          setUser({ ...user, avatarUrl: res.photoUrl, photoURL: res.photoUrl });
+          showZeeAlert("Success", "Profile photo updated successfully!", [{ text: "OK" }], "success");
+        } else {
+          showZeeAlert("Notice", res.error || "Failed to update profile photo.", [{ text: "OK" }], "error");
+        }
+      }
+    } catch (err: any) {
+      console.error("Image pick error:", err);
+      showZeeAlert("Error", "Could not load image from your device.", [{ text: "OK" }], "error");
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
+
+  const handleSelectPreset = async (presetUrl: string) => {
+    setPhotoPickerVisible(false);
+    if (!user) return;
+    setUploadingPhoto(true);
+    try {
+      const res = await updateUserProfilePhoto(user.uid, presetUrl);
+      if (res.success) {
+        setUser({ ...user, avatarUrl: presetUrl, photoURL: presetUrl });
+        showZeeAlert("Success", "Avatar updated successfully!", [{ text: "OK" }], "success");
+      }
+    } catch (err) {
+      console.error("Preset avatar error:", err);
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
+
+  const handleRemovePhoto = async () => {
+    setPhotoPickerVisible(false);
+    if (!user) return;
+    setUploadingPhoto(true);
+    try {
+      const res = await removeUserProfilePhoto(user.uid);
+      if (res.success) {
+        setUser({ ...user, avatarUrl: "", photoURL: "" });
+        showZeeAlert("Profile Photo Removed", "Your avatar has been reset to initials.", [{ text: "OK" }], "info");
+      }
+    } catch (err) {
+      console.error("Remove photo error:", err);
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
+
+  const currentAvatar = user?.avatarUrl || user?.photoURL || (user as any)?.avatar;
+  const hasCustomPhoto = Boolean(
+    currentAvatar &&
+      typeof currentAvatar === "string" &&
+      currentAvatar.trim().length > 5 &&
+      currentAvatar !== "null" &&
+      currentAvatar !== "undefined"
+  );
+
   return (
-    <ScrollView style={styles.container} contentContainerStyle={[styles.scrollContent, { paddingTop: Math.max(responsive.safeTop, 24) }]}>
-      {/* Digital Student ID Badge Card (Task 15) */}
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={[
+        styles.scrollContent,
+        { paddingTop: Math.max(responsive.safeTop, 24) },
+      ]}
+    >
+      {/* Digital Student ID Badge Card */}
       <View style={styles.idCardContainer}>
         <View style={styles.idCardHeader}>
           <View style={styles.idCardHeaderLeft}>
             <ShieldCheck size={20} color="#4F46E5" />
-            <Text style={styles.idCardInstitution}>{user?.schoolName || "ZeePrep Institutional Academy"}</Text>
+            <Text style={styles.idCardInstitution} numberOfLines={1}>
+              {user?.schoolName || "ZeePrep Institutional Academy"}
+            </Text>
           </View>
           <View style={styles.idBadgePill}>
             <Text style={styles.idBadgeText}>OFFICIAL STUDENT ID</Text>
@@ -54,16 +170,52 @@ export default function StudentProfileScreen() {
         </View>
 
         <View style={styles.idBodyRow}>
-          <View style={styles.avatarLarge}>
-            <Text style={styles.avatarText}>{user?.name?.charAt(0) || "S"}</Text>
-          </View>
+          {/* Avatar with Interactive Edit Overlay */}
+          <TouchableOpacity
+            style={styles.avatarHolder}
+            onPress={() => setPhotoPickerVisible(true)}
+            activeOpacity={0.8}
+            disabled={uploadingPhoto}
+          >
+            {uploadingPhoto ? (
+              <View style={styles.avatarLarge}>
+                <ActivityIndicator color="#FFFFFF" />
+              </View>
+            ) : hasCustomPhoto ? (
+              <Image source={{ uri: currentAvatar }} style={styles.avatarImage} />
+            ) : (
+              <View style={styles.avatarLarge}>
+                <Text style={styles.avatarText}>{user?.name?.charAt(0) || "S"}</Text>
+              </View>
+            )}
+
+            <View style={styles.cameraIconBadge}>
+              <Camera size={14} color="#FFFFFF" />
+            </View>
+          </TouchableOpacity>
 
           <View style={styles.idMainInfo}>
-            <Text style={styles.userName} numberOfLines={1}>{user?.name || "Student User"}</Text>
+            <Text style={styles.userName} numberOfLines={1}>
+              {user?.name || "Student User"}
+            </Text>
             <Text style={styles.idNumberText}>ID: {user?.loginId || "ZP-STU-10293"}</Text>
-            <Text style={styles.userEmail} numberOfLines={1}>{user?.email}</Text>
+            <Text style={styles.userEmail} numberOfLines={1}>
+              {user?.email}
+            </Text>
           </View>
         </View>
+
+        {/* Change Photo Trigger Button */}
+        <TouchableOpacity
+          style={styles.changePhotoBtn}
+          onPress={() => setPhotoPickerVisible(true)}
+          activeOpacity={0.8}
+        >
+          <Camera size={14} color="#4F46E5" />
+          <Text style={styles.changePhotoBtnText}>
+            {hasCustomPhoto ? "Update Profile Photo" : "Upload Profile Photo"}
+          </Text>
+        </TouchableOpacity>
 
         {/* Academic Details Grid */}
         <View style={styles.idDetailsGrid}>
@@ -89,6 +241,51 @@ export default function StudentProfileScreen() {
         </View>
       </View>
 
+      {/* Security & Login Telemetry Card */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Security & Access Telemetry</Text>
+        <View style={styles.securityCard}>
+          <View style={styles.securityRow}>
+            <View style={styles.securityIconBox}>
+              <Globe size={16} color="#059669" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.securityLabel}>Connected IP Address</Text>
+              <Text style={styles.securityValue}>
+                {user?.lastLoginIp || "Protected & Verified"}
+              </Text>
+            </View>
+            <View style={styles.verifiedChip}>
+              <CheckCircle2 size={12} color="#059669" />
+              <Text style={styles.verifiedText}>LOGGED</Text>
+            </View>
+          </View>
+
+          <View style={styles.securityDivider} />
+
+          <View style={styles.securityRow}>
+            <View style={styles.securityIconBox}>
+              <Clock size={16} color="#4F46E5" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.securityLabel}>Last Authenticated Session</Text>
+              <Text style={styles.securityValue}>
+                {user?.lastLoginAt
+                  ? new Date(user.lastLoginAt).toLocaleString("en-GB", {
+                      day: "numeric",
+                      month: "short",
+                      year: "numeric",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })
+                  : "Current Active Session"}
+              </Text>
+            </View>
+          </View>
+        </View>
+      </View>
+
+      {/* Account Operations */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Account & Portal Operations</Text>
         <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout} activeOpacity={0.8}>
@@ -97,6 +294,57 @@ export default function StudentProfileScreen() {
           <ChevronRight size={18} color={ZEEPREP_THEME.colors.error} />
         </TouchableOpacity>
       </View>
+
+      {/* Photo Picker Modal */}
+      <Modal visible={photoPickerVisible} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Choose Profile Photo</Text>
+              <TouchableOpacity onPress={() => setPhotoPickerVisible(false)}>
+                <X size={20} color="#64748B" />
+              </TouchableOpacity>
+            </View>
+
+            {/* Option 1: Upload from Gallery/Device */}
+            <TouchableOpacity
+              style={styles.modalActionBtn}
+              onPress={handlePickDeviceImage}
+              activeOpacity={0.85}
+            >
+              <Upload size={18} color="#4F46E5" />
+              <Text style={styles.modalActionText}>Upload from Device / Gallery</Text>
+            </TouchableOpacity>
+
+            {/* Option 2: Choose Presets */}
+            <Text style={styles.presetSectionTitle}>Or select an avatar preset:</Text>
+            <View style={styles.presetsGrid}>
+              {AVATAR_PRESETS.map((preset, idx) => (
+                <TouchableOpacity
+                  key={idx}
+                  style={styles.presetItem}
+                  onPress={() => handleSelectPreset(preset)}
+                  activeOpacity={0.8}
+                >
+                  <Image source={{ uri: preset }} style={styles.presetImage} />
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            {/* Option 3: Remove Custom Photo */}
+            {hasCustomPhoto && (
+              <TouchableOpacity
+                style={styles.removePhotoBtn}
+                onPress={handleRemovePhoto}
+                activeOpacity={0.8}
+              >
+                <Trash2 size={16} color="#DC2626" />
+                <Text style={styles.removePhotoText}>Remove Custom Photo</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
@@ -117,7 +365,7 @@ const styles = StyleSheet.create({
     padding: 20,
     borderWidth: 1,
     borderColor: "#C7D2FE",
-    marginBottom: 24,
+    marginBottom: 20,
     shadowColor: "#4F46E5",
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.06,
@@ -163,20 +411,43 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 16,
-    marginBottom: 18,
+    marginBottom: 14,
+  },
+  avatarHolder: {
+    position: "relative",
   },
   avatarLarge: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
+    width: 68,
+    height: 68,
+    borderRadius: 34,
     backgroundColor: "#4F46E5",
     alignItems: "center",
     justifyContent: "center",
   },
+  avatarImage: {
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    borderWidth: 2,
+    borderColor: "#4F46E5",
+  },
   avatarText: {
-    fontSize: 24,
+    fontSize: 26,
     fontWeight: "800",
     color: "#FFFFFF",
+  },
+  cameraIconBadge: {
+    position: "absolute",
+    bottom: -2,
+    right: -2,
+    backgroundColor: "#4F46E5",
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: "#FFFFFF",
   },
   idMainInfo: {
     flex: 1,
@@ -197,6 +468,25 @@ const styles = StyleSheet.create({
     color: "#64748B",
     marginTop: 2,
   },
+
+  changePhotoBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    backgroundColor: "#EEF2FF",
+    paddingVertical: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#C7D2FE",
+    marginBottom: 16,
+  },
+  changePhotoBtnText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#4F46E5",
+  },
+
   idDetailsGrid: {
     flexDirection: "row",
     backgroundColor: "#F8FAFC",
@@ -222,15 +512,71 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     color: "#0F172A",
   },
+
   section: {
-    marginBottom: 24,
+    marginBottom: 20,
   },
   sectionTitle: {
-    fontSize: 15,
-    fontWeight: "700",
+    fontSize: 14,
+    fontWeight: "800",
     color: ZEEPREP_THEME.colors.textPrimary,
-    marginBottom: 12,
+    marginBottom: 10,
+    letterSpacing: 0.3,
   },
+
+  securityCard: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 18,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    gap: 10,
+  },
+  securityRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  securityIconBox: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: "#F1F5F9",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  securityLabel: {
+    fontSize: 11,
+    color: "#64748B",
+    fontWeight: "600",
+  },
+  securityValue: {
+    fontSize: 13,
+    color: "#0F172A",
+    fontWeight: "700",
+    marginTop: 1,
+  },
+  verifiedChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "#ECFDF5",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: "#A7F3D0",
+  },
+  verifiedText: {
+    fontSize: 10,
+    fontWeight: "800",
+    color: "#059669",
+  },
+  securityDivider: {
+    height: 1,
+    backgroundColor: "#F1F5F9",
+  },
+
   logoutBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -245,5 +591,82 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "700",
     color: ZEEPREP_THEME.colors.error,
+  },
+
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(15, 23, 42, 0.6)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 20,
+  },
+  modalCard: {
+    width: "100%",
+    maxWidth: 400,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 24,
+    padding: 20,
+    gap: 14,
+  },
+  modalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  modalTitle: {
+    fontSize: 17,
+    fontWeight: "800",
+    color: "#0F172A",
+  },
+  modalActionBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    backgroundColor: "#EEF2FF",
+    paddingVertical: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#C7D2FE",
+  },
+  modalActionText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#4F46E5",
+  },
+  presetSectionTitle: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#64748B",
+    marginTop: 4,
+  },
+  presetsGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 12,
+    justifyContent: "center",
+  },
+  presetItem: {
+    borderRadius: 25,
+    borderWidth: 2,
+    borderColor: "#E2E8F0",
+    overflow: "hidden",
+  },
+  presetImage: {
+    width: 50,
+    height: 50,
+  },
+  removePhotoBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingVertical: 10,
+    marginTop: 4,
+  },
+  removePhotoText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#DC2626",
   },
 });

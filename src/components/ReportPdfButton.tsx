@@ -1,10 +1,7 @@
 /**
  * ZeePrep — Report PDF export trigger.
- * Web: prints the shared A4 HTML via a hidden iframe (browser "Save as PDF").
- * Native (APK): opens a WebView preview of the same HTML; the Save/Print button
- *   injects window.print(), which modern Android/iOS WebView routes to the
- *   system print sheet (Save as PDF). No extra native dependency required.
- * Both share ONE HTML document with A4 print CSS, so pagination is identical.
+ * Web: prints the shared A4 HTML via browser print window or iframe.
+ * Native (APK): opens a full-screen preview with A4 layout and triggers system print / Save as PDF.
  */
 import React, { useRef, useState } from "react";
 import { Platform, Pressable, Text, StyleSheet, Modal, View, ActivityIndicator } from "react-native";
@@ -17,6 +14,26 @@ import { ZEEPREP_THEME as TH } from "../constants/theme";
 type Props = ReportHtmlInput & { compact?: boolean };
 
 function webPrint(htmlStr: string) {
+  try {
+    const printWindow = window.open("", "_blank");
+    if (printWindow) {
+      printWindow.document.open();
+      printWindow.document.write(htmlStr);
+      printWindow.document.close();
+      setTimeout(() => {
+        try {
+          printWindow.focus();
+          printWindow.print();
+        } catch (e) {
+          console.warn("[ZeePrep] Print window notice:", e);
+        }
+      }, 350);
+      return;
+    }
+  } catch (e) {
+    // Fallback to iframe below
+  }
+
   try {
     const iframe = document.createElement("iframe");
     Object.assign(iframe.style, {
@@ -46,10 +63,10 @@ function webPrint(htmlStr: string) {
       } catch (e) {
         console.warn("[ZeePrep] web print failed:", e);
       }
-      setTimeout(cleanup, 1500);
-    }, 350);
+      setTimeout(cleanup, 2000);
+    }, 400);
   } catch (e) {
-    console.warn("[ZeePrep] web print failed:", e);
+    console.warn("[ZeePrep] web print fallback failed:", e);
   }
 }
 
@@ -72,20 +89,20 @@ export default function ReportPdfButton(props: Props) {
     <>
       <Pressable onPress={onPress} style={[styles.btn, compact && styles.btnCompact]} accessibilityRole="button">
         <FileText size={compact ? 14 : 16} color="#FFFFFF" />
-        {!compact && <Text style={styles.btnText}>Save as PDF</Text>}
+        {!compact && <Text style={styles.btnText}>Download PDF Report</Text>}
       </Pressable>
 
       {Platform.OS !== "web" && (
         <Modal visible={open} animationType="slide" onRequestClose={() => setOpen(false)}>
           <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Report Preview</Text>
+            <Text style={styles.modalTitle}>Academic Report PDF</Text>
             <View style={styles.modalActions}>
               <Pressable
                 onPress={() => webRef.current?.injectJavaScript("window.print(); true;")}
                 style={styles.printBtn}
               >
                 <FileText size={15} color="#FFFFFF" />
-                <Text style={styles.printBtnText}>Save / Print</Text>
+                <Text style={styles.printBtnText}>Save / Print PDF</Text>
               </Pressable>
               <Pressable onPress={() => setOpen(false)} style={styles.closeBtn}>
                 <X size={20} color={TH.colors.textPrimary} />
@@ -97,6 +114,8 @@ export default function ReportPdfButton(props: Props) {
             originWhitelist={["*"]}
             source={{ html: getHtml() }}
             style={{ flex: 1, backgroundColor: "#FFFFFF" }}
+            javaScriptEnabled={true}
+            domStorageEnabled={true}
             startInLoadingState
             renderLoading={() => (
               <ActivityIndicator style={{ marginTop: 40 }} color={TH.colors.primary} />
@@ -115,8 +134,8 @@ const styles = StyleSheet.create({
     gap: 6,
     backgroundColor: TH.colors.primary,
     paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderRadius: TH.borderRadius.full,
+    paddingVertical: 8,
+    borderRadius: 8,
   },
   btnCompact: { paddingHorizontal: 10, paddingVertical: 8 },
   btnText: { color: "#FFFFFF", fontWeight: "700", fontSize: 13 },
@@ -140,7 +159,7 @@ const styles = StyleSheet.create({
     backgroundColor: TH.colors.primary,
     paddingHorizontal: 14,
     paddingVertical: 8,
-    borderRadius: TH.borderRadius.full,
+    borderRadius: 8,
   },
   printBtnText: { color: "#FFFFFF", fontWeight: "700", fontSize: 13 },
   closeBtn: { padding: 6 },

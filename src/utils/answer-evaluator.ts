@@ -97,13 +97,20 @@ export function resolveOptionIndex(ans: any, canonicalOptions: CanonicalOption[]
   );
   if (directIdOpt) return directIdOpt.index;
 
-  // 2. Pattern match for internal IDs (e.g. opt_q_a -> 0, opt_q_b -> 1, opt_a_ai -> 0, etc.)
+  // 2. Pattern match for internal IDs (e.g. opt_q_a -> 0, opt_q_ai_12345_2 -> 2, opt_a_ai -> 0, etc.)
   const internalIdMatch = cleanVal.match(/^opt_(?:q_)?([a-h])(?:_[a-z0-9_]+)?$/i);
   if (internalIdMatch) {
     const char = internalIdMatch[1].toLowerCase();
     const letters = ["a", "b", "c", "d", "e", "f", "g", "h"];
     const idx = letters.indexOf(char);
     if (idx >= 0 && idx < canonicalOptions.length) return idx;
+  }
+
+  // 2b. Pattern match for internal IDs with trailing number (e.g. opt_q_ai_1786090138440_2 -> index 2)
+  const trailingNumMatch = cleanVal.match(/^opt_.*_([0-7])$/i);
+  if (trailingNumMatch) {
+    const numIdx = parseInt(trailingNumMatch[1], 10);
+    if (!isNaN(numIdx) && numIdx >= 0 && numIdx < canonicalOptions.length) return numIdx;
   }
 
   // 3. Numeric index check (e.g. 0, 1, 2, 3 or "0", "1", "2", "3")
@@ -165,21 +172,30 @@ export function resolveOptionText(ans: any, question: any, includePrefix: boolea
     return includePrefix ? `${opt.letter}. ${opt.text}` : opt.text;
   }
 
-  // If answer was a string that isn't an internal ID, fallback to returning it cleaned
   const strVal = String(ans).trim();
+
+  // If answer was an internal ID with trailing number (e.g. opt_q_ai_1786090138440_2 -> Option C)
+  const trailingNum = strVal.match(/^opt_.*_([0-7])$/i);
+  if (trailingNum) {
+    const numIdx = parseInt(trailingNum[1], 10);
+    const letters = ["A", "B", "C", "D", "E", "F", "G", "H"];
+    const letter = letters[numIdx] || "A";
+    return includePrefix ? `Option ${letter}` : `Option ${letter}`;
+  }
+
+  // If answer was an internal ID with letter (e.g. opt_q_b -> Option B)
   if (/^opt_[a-z0-9_]+$/i.test(strVal)) {
-    // It's an unmapped internal ID — extract letter if possible (e.g. opt_q_b -> Option B)
     const match = strVal.match(/^opt_(?:q_)?([a-h])/i);
     if (match) {
       const letter = match[1].toUpperCase();
       return includePrefix ? `Option ${letter}` : `Option ${letter}`;
     }
-    return "Answer unavailable";
+    return "Answer recorded";
   }
 
   // Clean out any [object Object] anomalies
   if (strVal === "[object Object]") {
-    return "Answer unavailable";
+    return "Answer recorded";
   }
 
   return strVal;

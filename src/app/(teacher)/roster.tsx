@@ -9,9 +9,9 @@ import {
   ActivityIndicator,
   RefreshControl,
   Modal,
-  Alert,
 } from "react-native";
 import { useAuthStore } from "../../stores/auth-store";
+import { showZeeAlert } from "../../stores/alert-store";
 import { getAllUsers, getAllStudentReports } from "../../services/firestore";
 import type { User, Report } from "../../types";
 import { ZEEPREP_THEME } from "../../constants/theme";
@@ -78,9 +78,11 @@ export default function TeacherRosterScreen() {
     setSendingRemark(true);
     setTimeout(() => {
       setSendingRemark(false);
-      Alert.alert(
+      showZeeAlert(
         "Remark Sent",
-        `Academic feedback successfully sent to ${selectedStudentForRemark.name}.`
+        `Academic feedback successfully sent to ${selectedStudentForRemark.name}.`,
+        [{ text: "OK" }],
+        "success"
       );
       setSelectedStudentForRemark(null);
       setRemarkText("");

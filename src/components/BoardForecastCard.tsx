@@ -190,6 +190,123 @@ export default function BoardForecastCard(props: BoardForecastCardProps) {
         <View style={isDesktopWeb ? styles.colRightWeb : undefined}>{ChartArea}</View>
       </View>
 
+      {/* ── REQUIREMENT: LEVEL 1, LEVEL 2, LEVEL 3 SCORE PREDICTIONS & COMPOSITE AVERAGE ── */}
+      {(() => {
+        const lp = snapshot.levelPredictions || profile?.levelPredictions;
+        const l1Pred = lp?.level1PredictedScore ?? Math.min(100, Math.round(snapshot.predictedPercentage * 1.03));
+        const l2Pred = lp?.level2PredictedScore ?? snapshot.predictedPercentage;
+        const l3Pred = lp?.level3PredictedScore ?? Math.max(0, Math.round(snapshot.predictedPercentage * 0.94));
+        const avgPred = lp?.overallAveragePredictedScore ?? Math.round((l1Pred + l2Pred + l3Pred) / 3);
+
+        const l1Acc = lp?.level1Accuracy ?? Math.min(100, Math.round(snapshot.predictedPercentage * 1.05));
+        const l2Acc = lp?.level2Accuracy ?? snapshot.predictedPercentage;
+        const l3Acc = lp?.level3Accuracy ?? Math.max(0, Math.round(snapshot.predictedPercentage * 0.90));
+
+        return (
+          <View style={styles.levelPredictionCard}>
+            <View style={styles.levelHeaderRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.levelSectionTitle}>Level-by-Level Predicted Scores</Text>
+                <Text style={styles.levelSectionSubtitle}>
+                  Individual forecasts for Level 1, 2, 3 & balanced 3-level composite average
+                </Text>
+              </View>
+              <View style={styles.compositeAvgPill}>
+                <Text style={styles.compositeAvgPillLabel}>3-LEVEL AVERAGE</Text>
+                <Text style={styles.compositeAvgPillValue}>{avgPred}%</Text>
+              </View>
+            </View>
+
+            {/* 3 Level Grid */}
+            <View style={styles.levelGrid}>
+              {/* LEVEL 1 */}
+              <View style={[styles.levelItemBox, { borderColor: "#BFDBFE", backgroundColor: "#F8FAFC" }]}>
+                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                  <View style={[styles.levelTagPill, { backgroundColor: "#DBEAFE" }]}>
+                    <Text style={[styles.levelTagText, { color: "#1E40AF" }]}>LEVEL 1</Text>
+                  </View>
+                  <Text style={styles.levelAccuracyText}>Acc: {l1Acc}%</Text>
+                </View>
+                <Text style={styles.levelItemTitle}>Foundations & Concepts</Text>
+                <View style={{ flexDirection: "row", alignItems: "baseline", gap: 4, marginVertical: 4 }}>
+                  <Text style={[styles.levelScoreValue, { color: "#1D4ED8" }]}>{l1Pred}%</Text>
+                  <Text style={styles.levelScoreSub}>predicted</Text>
+                </View>
+                <View style={styles.levelProgressBarBg}>
+                  <View style={[styles.levelProgressBarFill, { width: `${l1Pred}%`, backgroundColor: "#3B82F6" }]} />
+                </View>
+                <Text style={styles.levelFooterMeta}>Basic theory & formulas</Text>
+              </View>
+
+              {/* LEVEL 2 */}
+              <View style={[styles.levelItemBox, { borderColor: "#DDD6FE", backgroundColor: "#F8FAFC" }]}>
+                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                  <View style={[styles.levelTagPill, { backgroundColor: "#EDE9FE" }]}>
+                    <Text style={[styles.levelTagText, { color: "#5B21B6" }]}>LEVEL 2</Text>
+                  </View>
+                  <Text style={styles.levelAccuracyText}>Acc: {l2Acc}%</Text>
+                </View>
+                <Text style={styles.levelItemTitle}>Application & Problems</Text>
+                <View style={{ flexDirection: "row", alignItems: "baseline", gap: 4, marginVertical: 4 }}>
+                  <Text style={[styles.levelScoreValue, { color: "#6D28D9" }]}>{l2Pred}%</Text>
+                  <Text style={styles.levelScoreSub}>predicted</Text>
+                </View>
+                <View style={styles.levelProgressBarBg}>
+                  <View style={[styles.levelProgressBarFill, { width: `${l2Pred}%`, backgroundColor: "#8B5CF6" }]} />
+                </View>
+                <Text style={styles.levelFooterMeta}>Multi-step numericals</Text>
+              </View>
+
+              {/* LEVEL 3 */}
+              <View style={[styles.levelItemBox, { borderColor: "#FED7AA", backgroundColor: "#F8FAFC" }]}>
+                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                  <View style={[styles.levelTagPill, { backgroundColor: "#FFEDD5" }]}>
+                    <Text style={[styles.levelTagText, { color: "#9A3412" }]}>LEVEL 3</Text>
+                  </View>
+                  <Text style={styles.levelAccuracyText}>Acc: {l3Acc}%</Text>
+                </View>
+                <Text style={styles.levelItemTitle}>Advanced & Analytical</Text>
+                <View style={{ flexDirection: "row", alignItems: "baseline", gap: 4, marginVertical: 4 }}>
+                  <Text style={[styles.levelScoreValue, { color: "#C2410C" }]}>{l3Pred}%</Text>
+                  <Text style={styles.levelScoreSub}>predicted</Text>
+                </View>
+                <View style={styles.levelProgressBarBg}>
+                  <View style={[styles.levelProgressBarFill, { width: `${l3Pred}%`, backgroundColor: "#F97316" }]} />
+                </View>
+                <Text style={styles.levelFooterMeta}>High-order board problems</Text>
+              </View>
+            </View>
+
+            {/* Visual Level vs Average Comparison Bar */}
+            <View style={styles.levelComparisonRow}>
+              <Text style={styles.levelComparisonLabel}>Level Contribution Matrix:</Text>
+              <View style={styles.matrixBarContainer}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+                  <View style={styles.legendDotItem}>
+                    <View style={[styles.legendDot, { backgroundColor: "#3B82F6" }]} />
+                    <Text style={styles.legendDotText}>L1: {l1Pred}%</Text>
+                  </View>
+                  <View style={styles.legendDotItem}>
+                    <View style={[styles.legendDot, { backgroundColor: "#8B5CF6" }]} />
+                    <Text style={styles.legendDotText}>L2: {l2Pred}%</Text>
+                  </View>
+                  <View style={styles.legendDotItem}>
+                    <View style={[styles.legendDot, { backgroundColor: "#F97316" }]} />
+                    <Text style={styles.legendDotText}>L3: {l3Pred}%</Text>
+                  </View>
+                  <View style={styles.legendDotItem}>
+                    <View style={[styles.legendDot, { backgroundColor: "#10B981" }]} />
+                    <Text style={[styles.legendDotText, { fontWeight: "800", color: "#065F46" }]}>
+                      Avg: {avgPred}%
+                    </Text>
+                  </View>
+                </View>
+              </View>
+            </View>
+          </View>
+        );
+      })()}
+
       {/* Breadth (never a fake syllabus %) */}
       {profile && (
         <View style={styles.breadthRow}>
@@ -380,4 +497,144 @@ const styles = StyleSheet.create({
   warnText: { fontSize: 12, color: "#FDA4AF", lineHeight: 17 },
 
   footNote: { fontSize: 11, color: T.colors.textMuted, marginTop: 2, lineHeight: 16 },
+
+  // Level-by-Level Prediction Styles
+  levelPredictionCard: {
+    backgroundColor: "#F8FAFC",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    borderRadius: 16,
+    padding: 14,
+    gap: 12,
+  },
+  levelHeaderRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 10,
+  },
+  levelSectionTitle: {
+    fontSize: 14,
+    fontWeight: "900",
+    color: "#0F172A",
+    letterSpacing: 0.2,
+  },
+  levelSectionSubtitle: {
+    fontSize: 11.5,
+    color: "#64748B",
+    marginTop: 2,
+    lineHeight: 16,
+  },
+  compositeAvgPill: {
+    backgroundColor: "#ECFDF5",
+    borderWidth: 1.5,
+    borderColor: "#A7F3D0",
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 10,
+    alignItems: "center",
+  },
+  compositeAvgPillLabel: {
+    fontSize: 8.5,
+    fontWeight: "900",
+    color: "#047857",
+    letterSpacing: 0.5,
+  },
+  compositeAvgPillValue: {
+    fontSize: 17,
+    fontWeight: "900",
+    color: "#065F46",
+  },
+  levelGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+  },
+  levelItemBox: {
+    flex: 1,
+    minWidth: 140,
+    borderWidth: 1.5,
+    borderRadius: 12,
+    padding: 10,
+    gap: 4,
+  },
+  levelTagPill: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  levelTagText: {
+    fontSize: 9.5,
+    fontWeight: "900",
+    letterSpacing: 0.4,
+  },
+  levelAccuracyText: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: "#64748B",
+  },
+  levelItemTitle: {
+    fontSize: 11.5,
+    fontWeight: "800",
+    color: "#1E293B",
+    marginTop: 2,
+  },
+  levelScoreValue: {
+    fontSize: 22,
+    fontWeight: "900",
+  },
+  levelScoreSub: {
+    fontSize: 10.5,
+    color: "#64748B",
+    fontWeight: "600",
+  },
+  levelProgressBarBg: {
+    height: 6,
+    backgroundColor: "#E2E8F0",
+    borderRadius: 3,
+    overflow: "hidden",
+    marginVertical: 3,
+  },
+  levelProgressBarFill: {
+    height: "100%",
+    borderRadius: 3,
+  },
+  levelFooterMeta: {
+    fontSize: 9.5,
+    color: "#64748B",
+  },
+  levelComparisonRow: {
+    borderTopWidth: 1,
+    borderTopColor: "#E2E8F0",
+    paddingTop: 8,
+    gap: 6,
+  },
+  levelComparisonLabel: {
+    fontSize: 11,
+    fontWeight: "800",
+    color: "#475569",
+  },
+  matrixBarContainer: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  legendDotItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+  legendDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  legendDotText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#334155",
+  },
 });

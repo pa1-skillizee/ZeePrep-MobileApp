@@ -8,6 +8,7 @@ import {
   Switch,
   Alert,
 } from "react-native";
+import { showZeeAlert } from "../../stores/alert-store";
 import { ZEEPREP_THEME } from "../../constants/theme";
 import { Settings, Shield, Bell, Database, Lock, Server, CheckCircle2 } from "lucide-react-native";
 
@@ -69,7 +70,7 @@ export default function SuperAdminSettingsScreen() {
             onValueChange={(val) => {
               setMaintenanceMode(val);
               if (val) {
-                Alert.alert("Maintenance Mode", "System maintenance mode activated.");
+                showZeeAlert("Maintenance Mode", "System maintenance mode activated.", [{ text: "OK" }], "warning");
               }
             }}
             trackColor={{ false: "#E2E8F0", true: "#FCA5A5" }}

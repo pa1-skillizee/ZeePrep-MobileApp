@@ -10,6 +10,7 @@ export interface AIGeneratedQuestionSuggestion {
   subject: string;
   grade: string;
   topic: string;
+  chapter?: string;
   level?: "level1" | "level2" | "level3";
 }
 
@@ -19,6 +20,20 @@ export interface WrongAnswerAnalysisResult {
   detailedExplanation: string;
   suggestedRevisionTopic: string;
   practiceRecommendation: string;
+  problemType?: string;
+  formulaStruggledWith?: string;
+  chapter?: string;
+}
+
+export interface StruggledConceptInsight {
+  questionNumber: number;
+  questionText: string;
+  problemType: string;
+  chapter: string;
+  topic: string;
+  formulaStruggledWith: string;
+  conceptStruggledWith: string;
+  exactRemedy: string;
 }
 
 export interface ReportInsightResult {
@@ -28,36 +43,69 @@ export interface ReportInsightResult {
   conceptualGaps: string[];
   actionableAdvice: string[];
   recommendation: string;
+  struggledConcepts?: StruggledConceptInsight[];
 }
 
+import { deriveMathProblemDiagnosis } from "../utils/math-diagnostics";
+
 // Environment & Firebase Cloud Function Endpoint Resolution
-const RESOLVED_API_KEY =
-  process.env.EXPO_PUBLIC_GEMINI_API_KEY ||
-  process.env.GEMINI_API_KEY ||
-  process.env.EXPO_PUBLIC_FIREBASE_API_KEY ||
-  "";
+const DEFAULT_GEMINI_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY || "";
 
-const FIREBASE_CLOUD_FUNCTION_URL =
-  process.env.EXPO_PUBLIC_FIREBASE_CLOUD_FUNCTION_URL ||
-  "https://us-central1-zeeprep01.cloudfunctions.net/apiGenerateGemini";
-
-// Supported active Gemini Model (gemini-2.5-flash exclusively)
 function getModelEndpoints(key: string): string[] {
   if (!key) return [];
   return [
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`,
+    `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${key}`,
   ];
 }
 
 /**
  * Universal Secure Call Wrapper for Gemini AI
- * 1. Tries secure Firebase Cloud Function endpoint (zeeprep01)
- * 2. Falls back to direct Gemini REST model endpoints if key is configured
+ * 1. Direct high-speed Gemini REST model endpoints (gemini-2.5-flash)
+ * 2. Falls back to Firebase Cloud Function if direct fails
  */
 export async function callGeminiAPI(prompt: string, taskType: string = "general"): Promise<string | null> {
-  // Option 1: Try Deployed Firebase Cloud Function
+  const envGeminiKey = process.env.EXPO_PUBLIC_GEMINI_API_KEY || process.env.GEMINI_API_KEY || "";
+  const envFirebaseKey = process.env.EXPO_PUBLIC_FIREBASE_API_KEY || "";
+  const keyToUse = envGeminiKey || DEFAULT_GEMINI_KEY || envFirebaseKey;
+
+  // Option 1: Direct Gemini REST Endpoints with live models
+  if (keyToUse) {
+    const endpoints = getModelEndpoints(keyToUse);
+
+    for (const endpoint of endpoints) {
+      try {
+        const response = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [{ text: prompt }],
+              },
+            ],
+          }),
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          const candidateText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (candidateText && candidateText.trim().length > 0) {
+            return candidateText.trim();
+          }
+        } else {
+          const errText = await response.text();
+          console.warn(`[ZeePrep AI Service] Endpoint returned status ${response.status}: ${errText.substring(0, 120)}`);
+        }
+      } catch (err) {
+        console.warn(`[ZeePrep AI Service] Model request failed:`, err);
+      }
+    }
+  }
+
+  // Option 2: Fallback to Deployed Firebase Cloud Function
   try {
-    const cloudRes = await fetch(FIREBASE_CLOUD_FUNCTION_URL, {
+    const cloudRes = await fetch("https://us-central1-zeeprep01.cloudfunctions.net/apiGenerateGemini", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ prompt, taskType, model: "gemini-2.5-flash" }),
@@ -68,53 +116,9 @@ export async function callGeminiAPI(prompt: string, taskType: string = "general"
       if (cloudData.success && cloudData.resultText) {
         return cloudData.resultText.trim();
       }
-    } else {
-      console.warn(`[ZeePrep AI] Cloud Function returned ${cloudRes.status}: falling back to direct endpoints.`);
     }
   } catch (err) {
-    console.warn("[ZeePrep AI] Cloud Function request failed:", err);
-  }
-
-  // Option 2: Fallback to Direct Gemini REST Endpoints
-  const keyToUse =
-    process.env.EXPO_PUBLIC_GEMINI_API_KEY ||
-    process.env.GEMINI_API_KEY ||
-    "";
-
-  if (!keyToUse) {
-    console.warn("[ZeePrep AI Service] No EXPO_PUBLIC_GEMINI_API_KEY provided in .env.");
-    return null;
-  }
-
-  const endpoints = getModelEndpoints(keyToUse);
-
-  for (const endpoint of endpoints) {
-    try {
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [{ text: prompt }],
-            },
-          ],
-        }),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        const candidateText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (candidateText && candidateText.trim().length > 0) {
-          return candidateText.trim();
-        }
-      } else {
-        const errText = await response.text();
-        console.warn(`[ZeePrep AI Service] Endpoint returned status ${response.status}: ${errText}`);
-      }
-    } catch (err) {
-      console.warn(`[ZeePrep AI Service] Model request failed:`, err);
-    }
+    console.warn("[ZeePrep AI] Cloud Function request fallback failed:", err);
   }
 
   return null;
@@ -268,36 +272,42 @@ export async function suggestQuestionItems(
   level: "level1" | "level2" | "level3" = "level1"
 ): Promise<AIGeneratedQuestionSuggestion[]> {
   const safeCount = Math.min(100, Math.max(1, count));
-  const levelDescription =
+  const syllabusPart =
     level === "level1"
-      ? "Level 1: Recall & direct formula application (1 mark)"
+      ? "Part 1: Foundational Algebra, Sets, Functions & Number Systems"
       : level === "level2"
-      ? "Level 2: Moderate multi-step problem solving (2 marks)"
-      : "Level 3: Hard analytical & multi-concept problem (4 marks)";
+      ? "Part 2: Trigonometry, Coordinate Geometry, Sequences & Conics"
+      : "Part 3: Calculus, Limits, Derivatives, Statistics & Probability";
 
-  const prompt = `You are ZeePrep AI Exam Generator. Generate ${safeCount} high-quality curriculum-aligned exam questions for Grade ${grade} (${subject}).
-Subject: ${subject}
-Grade: ${grade}
-Topic: ${topic || "Core Curriculum"}
-Difficulty Target: ${levelDescription}
+  const prompt = `You are ZeePrep CBSE Examination Question Generator.
+Generate ${safeCount} authentic, high-quality CBSE examination prep questions for Grade ${grade} (${subject}).
+Focus Area: ${topic || "Core Curriculum"} (${syllabusPart})
+Standard: CBSE Board & School Half-Yearly / Final Examination Standard
+
+CRITICAL INSTRUCTIONS FOR OPTIONS:
+- "options" MUST be a pure array of exactly 4 strings containing ONLY the answer text (e.g. ["2 + 2 cos(x - y)", "2 - 2 cos(x - y)", "2 + 2 sin(x - y)", "2 - 2 sin(x - y)"]).
+- Do NOT include question IDs, keys, or prefix letters like "A.", "B.", "(1)", "id:" inside the option strings.
+- "correctAnswer" MUST match one of the 4 option strings exactly.
 
 Return ONLY a valid JSON array of ${safeCount} objects. Each object MUST contain keys:
 "text": string (question text),
 "type": "mcq",
 "options": array of exactly 4 strings,
 "correctAnswer": string (must match one of the 4 options exactly),
-"explanation": string (step-by-step solution),
-"difficulty": "easy" | "medium" | "hard"
+"explanation": string (step-by-step mathematical explanation),
+"chapter": string,
+"topic": string
 
 Example Output:
 [
   {
-    "text": "What is the SI unit of Force?",
+    "text": "What is the degree measure corresponding to 7π/6 radians?",
     "type": "mcq",
-    "options": ["Joule", "Newton", "Pascal", "Watt"],
-    "correctAnswer": "Newton",
-    "explanation": "Force = mass * acceleration. SI unit is kg*m/s^2, known as Newton (N).",
-    "difficulty": "easy"
+    "options": ["150°", "210°", "225°", "240°"],
+    "correctAnswer": "210°",
+    "explanation": "Degree = (7π/6) * (180°/π) = 7 * 30° = 210°.",
+    "chapter": "Trigonometric Functions",
+    "topic": "Angles & Radian Measures"
   }
 ]`;
 
@@ -305,14 +315,25 @@ Example Output:
   if (geminiText) {
     const parsed = parseGeminiJson<AIGeneratedQuestionSuggestion[]>(geminiText);
     if (parsed && Array.isArray(parsed) && parsed.length > 0) {
-      return parsed.slice(0, safeCount).map((q) => ({
-        ...q,
-        subject: subject || "Science",
-        grade: grade || "10",
-        topic: topic || "Core Syllabus",
-        level,
-        options: Array.isArray(q.options) && q.options.length === 4 ? q.options : ["Option A", "Option B", "Option C", "Option D"],
-      }));
+      return parsed.slice(0, safeCount).map((q) => {
+        const rawOpts = Array.isArray(q.options) && q.options.length === 4 ? q.options : ["Option A", "Option B", "Option C", "Option D"];
+        const cleanOpts = rawOpts.map((opt: any) => {
+          if (typeof opt === "string") return opt.replace(/^[A-Da-d1-4][.\):]\s*/, "").trim();
+          if (typeof opt === "object" && opt) return String(opt.text || opt.label || opt.value || "").replace(/^[A-Da-d1-4][.\):]\s*/, "").trim();
+          return String(opt || "");
+        });
+
+        return {
+          ...q,
+          subject: subject || "Mathematics",
+          grade: grade || "11",
+          topic: q.topic || topic || "Core Syllabus",
+          chapter: q.chapter || topic || "Curriculum Chapter",
+          level,
+          options: cleanOpts,
+          correctAnswer: typeof q.correctAnswer === "string" ? q.correctAnswer.replace(/^[A-Da-d1-4][.\):]\s*/, "").trim() : cleanOpts[0],
+        };
+      });
     }
   }
 
@@ -381,37 +402,62 @@ export async function analyzeWrongAnswerWithGemini(
   questionText: string,
   studentAnswer: string,
   correctAnswer: string,
-  subject: string = "Science",
-  topic: string = "General"
+  subject: string = "Mathematics",
+  topic: string = "General",
+  chapter: string = ""
 ): Promise<WrongAnswerAnalysisResult> {
-  const prompt = `You are ZeePrep AI Diagnostic Examiner. Analyze the following student incorrect response:
+  const isUnanswered = !studentAnswer || String(studentAnswer).trim() === "";
+  const diag = deriveMathProblemDiagnosis(
+    { questionText, topic, chapter },
+    studentAnswer,
+    false,
+    isUnanswered
+  );
+
+  const prompt = `You are ZeePrep AI Diagnostic Examiner. Analyze the following student response in CBSE Grade 11 Mathematics:
 Subject: ${subject}
-Topic: ${topic}
+Chapter: ${chapter || diag.chapter}
+Topic: ${topic || diag.topic}
+Problem Type: ${diag.problemType}
+Formula Involved: ${diag.formulaStruggledWith}
 Question: "${questionText}"
-Student Selected Answer: "${studentAnswer}"
+Student Answer: "${studentAnswer || 'Skipped / Unanswered'}"
 Correct Answer: "${correctAnswer}"
 
 Return ONLY JSON with keys:
 "misconception": string (concise description of student's conceptual error),
-"likelyReason": string (why the student chose this incorrect answer),
-"detailedExplanation": string (step-by-step correction),
+"likelyReason": string (why the student struggled with this problem type or formula),
+"detailedExplanation": string (step-by-step mathematical solution & correction),
 "suggestedRevisionTopic": string (topic to review),
-"practiceRecommendation": string (actionable practice recommendation)`;
+"practiceRecommendation": string (actionable practice recommendation),
+"problemType": string,
+"formulaStruggledWith": string,
+"chapter": string`;
 
   const responseText = await callGeminiAPI(prompt);
   if (responseText) {
     const parsed = parseGeminiJson<WrongAnswerAnalysisResult>(responseText);
     if (parsed && parsed.misconception && parsed.detailedExplanation) {
-      return parsed;
+      return {
+        ...parsed,
+        problemType: parsed.problemType || diag.problemType,
+        formulaStruggledWith: parsed.formulaStruggledWith || diag.formulaStruggledWith,
+        chapter: parsed.chapter || diag.chapter,
+      };
     }
   }
 
   return {
-    misconception: "Confusion between scalar magnitude and vector direction components.",
-    likelyReason: "Selected the arithmetic sum instead of calculating the vector resultant magnitude.",
-    detailedExplanation: `The correct answer is "${correctAnswer}". When combining orthogonal components, apply Pythagoras theorem: R = sqrt(A² + B²).`,
-    suggestedRevisionTopic: `${topic} - Vector Fundamentals`,
-    practiceRecommendation: "Practice 5 Level 2 numerical problems on orthogonal vector addition.",
+    misconception: isUnanswered
+      ? `Skipped ${diag.problemType}. Requires revision of ${diag.conceptStruggledWith}`
+      : `Calculation or formula application error in ${diag.problemType}.`,
+    likelyReason: `Struggled with the governing formula: ${diag.formulaStruggledWith}`,
+    detailedExplanation: `The correct answer is "${correctAnswer}". Application: Use ${diag.formulaStruggledWith}. ${diag.exactRemedy}`,
+    suggestedRevisionTopic: `${diag.chapter} — ${diag.topic}`,
+    practiceRecommendation: `Practice 3-5 standard problems on ${diag.topic} before your next test.`,
+    problemType: diag.problemType,
+    formulaStruggledWith: diag.formulaStruggledWith,
+    chapter: diag.chapter,
   };
 }
 
@@ -419,6 +465,32 @@ Return ONLY JSON with keys:
  * 6. AI REPORT INSIGHTS & DIAGNOSTIC ANALYTICS
  */
 export async function generateTeacherAIReportAnalysis(report: Report): Promise<ReportInsightResult> {
+  const struggledConcepts: StruggledConceptInsight[] = [];
+
+  if (report.detailedAnalysis && report.detailedAnalysis.length > 0) {
+    report.detailedAnalysis.forEach((q, idx) => {
+      if (!q.isCorrect) {
+        const isUnanswered = !q.studentAnswer || String(q.studentAnswer).trim() === "";
+        const diag = deriveMathProblemDiagnosis(
+          q,
+          q.studentAnswer,
+          Boolean(q.isCorrect),
+          isUnanswered
+        );
+        struggledConcepts.push({
+          questionNumber: idx + 1,
+          questionText: q.questionText || (q as any).text || `Question ${idx + 1}`,
+          problemType: diag.problemType,
+          chapter: diag.chapter,
+          topic: diag.topic,
+          formulaStruggledWith: diag.formulaStruggledWith,
+          conceptStruggledWith: diag.conceptStruggledWith,
+          exactRemedy: diag.exactRemedy,
+        });
+      }
+    });
+  }
+
   const questionBreakdown = report.detailedAnalysis
     ? report.detailedAnalysis
         .map(
@@ -437,7 +509,7 @@ export async function generateTeacherAIReportAnalysis(report: Report): Promise<R
   const prompt = `You are ZeePrep Diagnostic Report Engine. Analyze the following exam scorecard:
 Exam Title: "${report.examTitle}"
 Subject: ${(report as any).subject || "General"}
-Grade: ${report.grade || "12"}
+Grade: ${report.grade || "11"}
 Score: ${report.obtainedMarks}/${report.totalMarks} Marks (${report.percentage}%, Accuracy: ${report.accuracy}%)
 Correct: ${report.correctAnswers}, Incorrect: ${report.incorrectAnswers}, Unanswered: ${report.unattempted}
 Total Questions: ${report.totalQuestions}, Total Possible Marks: ${report.totalMarks}
@@ -446,10 +518,11 @@ Time Spent: ${Math.round(report.timeSpentSeconds / 60)} minutes (${report.timeSp
 Question Telemetry & Weight Breakdown:
 ${questionBreakdown}
 
-Evaluate high-weight question losses vs low-weight losses to provide concise revision recommendations.
+Struggled Math Problem Types & Formulas:
+${struggledConcepts.map((s) => `• Q${s.questionNumber}: [${s.chapter}] ${s.problemType} | Formula: ${s.formulaStruggledWith}`).join("\n")}
 
 Return ONLY a valid JSON object with the following keys:
-"reviewPointers": array of 3 to 6 short, actionable bullet points (e.g. "Revise concepts related to quadratic equations.", "Review questions where calculation errors caused incorrect answers.", "Spend additional practice time on algebraic simplification."),
+"reviewPointers": array of 3 to 6 short, actionable bullet points,
 "strongTopics": string array,
 "weakTopics": string array,
 "conceptualGaps": string array,
@@ -503,6 +576,7 @@ Return ONLY a valid JSON object with the following keys:
         conceptualGaps,
         actionableAdvice,
         recommendation: parsed.recommendation || "Focus on targeted revision for identified weak areas.",
+        struggledConcepts,
       };
     }
   }
@@ -510,19 +584,22 @@ Return ONLY a valid JSON object with the following keys:
   // Factual Topic Performance Fallback from Report Telemetry
   const fallbackWeak: string[] = [];
   const fallbackStrong: string[] = [];
+  const topicBreakdownDetails: { topic: string; acc: number; wrong: number; total: number }[] = [];
 
   if (report.detailedAnalysis && report.detailedAnalysis.length > 0) {
-    const topicAcc = new Map<string, { correct: number; total: number }>();
+    const topicAcc = new Map<string, { correct: number; total: number; wrong: number }>();
     report.detailedAnalysis.forEach((q) => {
       const t = q.topic || q.chapter || "General";
-      const curr = topicAcc.get(t) || { correct: 0, total: 0 };
+      const curr = topicAcc.get(t) || { correct: 0, total: 0, wrong: 0 };
       if (q.isCorrect) curr.correct++;
+      else curr.wrong++;
       curr.total++;
       topicAcc.set(t, curr);
     });
 
     topicAcc.forEach((stat, topic) => {
-      const acc = (stat.correct / stat.total) * 100;
+      const acc = Math.round((stat.correct / stat.total) * 100);
+      topicBreakdownDetails.push({ topic, acc, wrong: stat.wrong, total: stat.total });
       if (acc < 60) {
         fallbackWeak.push(topic);
       } else if (acc >= 75) {
@@ -531,17 +608,45 @@ Return ONLY a valid JSON object with the following keys:
     });
   }
 
+  const generatedAdvice: string[] = [];
+  if (fallbackWeak.length > 0) {
+    generatedAdvice.push(`Focus 70% of revision time on ${fallbackWeak.slice(0, 2).join(" & ")} concepts and formula derivations.`);
+    generatedAdvice.push(`Solve at least 5-10 structured practice questions in ${fallbackWeak[0]} to eliminate repeated errors.`);
+  }
+  if (report.accuracy < 70) {
+    generatedAdvice.push("Prioritize concept accuracy and reading question stems carefully before submitting answers.");
+  }
+  if (report.timeSpentSeconds && report.totalQuestions && Math.round(report.timeSpentSeconds / report.totalQuestions) < 20) {
+    generatedAdvice.push("Avoid answering too quickly; review calculation steps before selecting the final option.");
+  }
+  if (generatedAdvice.length === 0) {
+    generatedAdvice.push("Maintain current study routine with advanced Level-3 problem sets.");
+    generatedAdvice.push("Conduct periodic revision to retain high mastery across strong chapters.");
+  }
+
+  const generatedGaps: string[] = [];
+  if (fallbackWeak.length > 0) {
+    fallbackWeak.forEach((w) => {
+      const detail = topicBreakdownDetails.find((d) => d.topic === w);
+      if (detail) {
+        generatedGaps.push(`Low concept retention in ${w} (${detail.acc}% accuracy, ${detail.wrong}/${detail.total} questions missed)`);
+      } else {
+        generatedGaps.push(`Conceptual ambiguity in ${w}`);
+      }
+    });
+  } else {
+    generatedGaps.push("Minor calculation or interpretation slips on complex multi-step questions");
+  }
+
   return {
     reviewPointers: deriveFallbackPointers(fallbackWeak, fallbackStrong),
-    strongTopics: fallbackStrong,
+    strongTopics: fallbackStrong.length > 0 ? fallbackStrong : ["Core Fundamentals"],
     weakTopics: fallbackWeak,
-    conceptualGaps: fallbackWeak.map((w) => `Conceptual ambiguity in ${w}`),
-    actionableAdvice: [
-      "Review your itemized question scorecard for step-by-step diagnostic feedback.",
-      "Work through the recommended study resources for identified weak topics.",
-    ],
+    conceptualGaps: generatedGaps,
+    actionableAdvice: generatedAdvice,
     recommendation: fallbackWeak.length > 0
-      ? `Allocate dedicated revision time for ${fallbackWeak.join(", ")} before the next assessment.`
-      : "Solid overall performance. Continue with advanced practice material.",
+      ? `Allocate dedicated remedial practice for ${fallbackWeak.join(", ")} before the next board test.`
+      : "Solid academic performance across assessed concepts. Continue with Level-3 practice questions.",
+    struggledConcepts,
   };
 }

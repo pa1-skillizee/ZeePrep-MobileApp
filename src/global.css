@@ -179,3 +179,128 @@ button:active, [role="button"]:active {
   background-color: #EEF2FF !important;
   color: #4F46E5 !important;
 }
+
+/* Animated Vector Illustration Keyframes (Original ZeePrep Website) */
+@keyframes spinClockwise {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes spinCounterClockwise {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(-360deg); }
+}
+
+@keyframes pulseDataNode {
+  0%, 100% { transform: scale(0.9); opacity: 0.7; }
+  50% { transform: scale(1.15); opacity: 1; }
+}
+
+@keyframes floatBadge {
+  0%, 100% { transform: translateY(-8px) rotate(-2deg); }
+  50% { transform: translateY(6px) rotate(3deg); }
+}
+
+@keyframes sandDrain {
+  0%, 100% { transform: scaleY(1) translateY(0); }
+  50% { transform: scaleY(0.3) translateY(18px); }
+}
+
+@keyframes sandFill {
+  0%, 100% { transform: scaleY(0.4); }
+  50% { transform: scaleY(1.1); }
+}
+
+@keyframes sandStream {
+  from { stroke-dashoffset: 20; }
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes chartBounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px) scale(1.04); }
+}
+
+@keyframes characterIdle {
+  0%, 100% { transform: translateY(-2px); }
+  50% { transform: translateY(2px); }
+}
+
+@keyframes characterExcited {
+  0%, 100% { transform: translateY(0); }
+  25% { transform: translateY(-14px) rotate(-1deg); }
+  50% { transform: translateY(0); }
+  75% { transform: translateY(-8px) rotate(1deg); }
+}
+
+.anim-gear-large {
+  transform-origin: 340px 110px;
+  animation: spinClockwise 25s linear infinite;
+}
+
+.anim-gear-medium {
+  transform-origin: 90px 320px;
+  animation: spinCounterClockwise 18s linear infinite;
+}
+
+.anim-gear-small {
+  transform-origin: 640px 170px;
+  animation: spinClockwise 12s linear infinite;
+}
+
+.anim-star-green {
+  transform-origin: 60px 195px;
+  animation: pulseDataNode 2.4s ease-in-out infinite;
+}
+
+.anim-star-indigo {
+  transform-origin: 260px 110px;
+  animation: pulseDataNode 3s ease-in-out infinite;
+}
+
+.anim-star-orange {
+  transform-origin: 710px 282px;
+  animation: pulseDataNode 2.8s ease-in-out infinite 0.5s;
+}
+
+.anim-float-badge {
+  transform-origin: 640px 120px;
+  animation: floatBadge 3.5s ease-in-out infinite;
+}
+
+.anim-sand-top {
+  transform-origin: 592px 345px;
+  animation: sandDrain 6s ease-in-out infinite;
+}
+
+.anim-sand-line {
+  stroke-dasharray: 6 4;
+  animation: sandStream 0.5s linear infinite;
+}
+
+.anim-sand-bottom {
+  transform-origin: 592px 435px;
+  animation: sandFill 6s ease-in-out infinite;
+}
+
+.anim-chart-arrow {
+  transform-origin: 450px 240px;
+  animation: chartBounce 2.2s ease-in-out infinite;
+}
+
+.anim-character-idle {
+  animation: characterIdle 3.5s ease-in-out infinite;
+}
+
+.anim-character-excited {
+  animation: characterExcited 0.7s ease-in-out infinite;
+}
+
+/* Web Smooth Form Inputs Focus */
+.web-login-input:focus {
+  border-color: #4F46E5 !important;
+  box-shadow: 0 0 0 3.5px rgba(79, 70, 229, 0.15) !important;
+  background-color: #FFFFFF !important;
+  outline: none !important;
+}
+

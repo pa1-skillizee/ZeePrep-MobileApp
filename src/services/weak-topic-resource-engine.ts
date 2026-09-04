@@ -230,6 +230,390 @@ export function filterEligibleResources(
   return availableResources.filter((res) => isResourceEligibleForStudent(res, studentContext));
 }
 
+export function resolveActualTopic(
+  rawTopic: string | undefined | null,
+  chapter: string | undefined | null,
+  subject: string | undefined | null,
+  questionText: string | undefined | null,
+  examTitle: string | undefined | null
+): string {
+  const normSub = normalizeSubject(subject);
+  const cleanTopic = String(rawTopic || "").trim();
+  const cleanChap = String(chapter || "").trim();
+
+  // 1. If topic is already a specific subtopic (not equal to subject or generic placeholder)
+  if (
+    cleanTopic &&
+    cleanTopic.toLowerCase() !== (subject || "").toLowerCase() &&
+    cleanTopic.toLowerCase() !== normSub &&
+    cleanTopic.toLowerCase() !== "general" &&
+    cleanTopic.toLowerCase() !== "general concept" &&
+    cleanTopic.toLowerCase() !== "core concepts" &&
+    cleanTopic.toLowerCase() !== "assessment" &&
+    cleanTopic.toLowerCase() !== "undefined"
+  ) {
+    return cleanTopic;
+  }
+
+  // 2. If chapter is specific and distinct
+  if (
+    cleanChap &&
+    cleanChap.toLowerCase() !== (subject || "").toLowerCase() &&
+    cleanChap.toLowerCase() !== normSub &&
+    cleanChap.toLowerCase() !== "general" &&
+    cleanChap.toLowerCase() !== "undefined"
+  ) {
+    return cleanChap;
+  }
+
+  // 3. Fallback: Intelligent concept extraction from question text & exam title
+  const txt = (String(questionText || "") + " " + String(examTitle || "")).toLowerCase();
+
+  // Physics concepts
+  if (normSub === "physics" || normSub === "science" || txt.includes("physic")) {
+    if (
+      txt.includes("speed") ||
+      txt.includes("velocity") ||
+      txt.includes("acceleration") ||
+      txt.includes("displacement") ||
+      txt.includes("motion") ||
+      txt.includes("distance-time")
+    ) {
+      return "Kinematics & Motion";
+    }
+    if (
+      txt.includes("force") ||
+      txt.includes("newton") ||
+      txt.includes("inertia") ||
+      txt.includes("momentum") ||
+      txt.includes("friction") ||
+      txt.includes("impulse")
+    ) {
+      return "Laws of Motion & Force";
+    }
+    if (
+      txt.includes("work") ||
+      txt.includes("kinetic energy") ||
+      txt.includes("potential energy") ||
+      txt.includes("power") ||
+      txt.includes("joule") ||
+      txt.includes("watt")
+    ) {
+      return "Work, Energy & Power";
+    }
+    if (
+      txt.includes("gravitation") ||
+      txt.includes("gravity") ||
+      txt.includes("free fall") ||
+      txt.includes("weight") ||
+      txt.includes("kepler") ||
+      txt.includes("orbital")
+    ) {
+      return "Gravitation & Gravity";
+    }
+    if (
+      txt.includes("current") ||
+      txt.includes("voltage") ||
+      txt.includes("resistance") ||
+      txt.includes("resistor") ||
+      txt.includes("ohm") ||
+      txt.includes("circuit") ||
+      txt.includes("ampere") ||
+      txt.includes("electric")
+    ) {
+      return "Current Electricity & Circuits";
+    }
+    if (
+      txt.includes("magnet") ||
+      txt.includes("solenoid") ||
+      txt.includes("lorentz") ||
+      txt.includes("induction") ||
+      txt.includes("flux") ||
+      txt.includes("fleming")
+    ) {
+      return "Magnetic Effects & Induction";
+    }
+    if (
+      txt.includes("light") ||
+      txt.includes("reflection") ||
+      txt.includes("refraction") ||
+      txt.includes("mirror") ||
+      txt.includes("lens") ||
+      txt.includes("focal") ||
+      txt.includes("snell") ||
+      txt.includes("prism") ||
+      txt.includes("ray")
+    ) {
+      return "Ray Optics & Light";
+    }
+    if (
+      txt.includes("sound") ||
+      txt.includes("echo") ||
+      txt.includes("frequency") ||
+      txt.includes("wavelength") ||
+      txt.includes("ultrasound") ||
+      txt.includes("sonar") ||
+      txt.includes("vibration") ||
+      txt.includes("wave")
+    ) {
+      return "Sound & Waves";
+    }
+    if (
+      txt.includes("heat") ||
+      txt.includes("temperature") ||
+      txt.includes("thermal") ||
+      txt.includes("calori") ||
+      txt.includes("conduction") ||
+      txt.includes("radiation") ||
+      txt.includes("specific heat")
+    ) {
+      return "Thermodynamics & Heat";
+    }
+    if (
+      txt.includes("pressure") ||
+      txt.includes("density") ||
+      txt.includes("buoyant") ||
+      txt.includes("archimedes") ||
+      txt.includes("pascal") ||
+      txt.includes("fluid")
+    ) {
+      return "Fluid Mechanics & Pressure";
+    }
+    if (
+      txt.includes("semiconductor") ||
+      txt.includes("diode") ||
+      txt.includes("transistor") ||
+      txt.includes("logic gate") ||
+      txt.includes("p-n")
+    ) {
+      return "Semiconductors & Electronics";
+    }
+    if (
+      txt.includes("atom") ||
+      txt.includes("nucleus") ||
+      txt.includes("nuclear") ||
+      txt.includes("radioactiv") ||
+      txt.includes("bohr") ||
+      txt.includes("rutherford")
+    ) {
+      return "Atomic & Nuclear Physics";
+    }
+  }
+
+  // Chemistry concepts
+  if (normSub === "chemistry" || normSub === "science" || txt.includes("chem")) {
+    if (
+      txt.includes("acid") ||
+      txt.includes("base") ||
+      txt.includes("indicator") ||
+      txt.includes("ph") ||
+      txt.includes("neutraliz") ||
+      txt.includes("litmus") ||
+      txt.includes("salt")
+    ) {
+      return "Acids, Bases & Salts";
+    }
+    if (
+      txt.includes("metal") ||
+      txt.includes("non-metal") ||
+      txt.includes("lustr") ||
+      txt.includes("malleab") ||
+      txt.includes("reactivity series") ||
+      txt.includes("metallurgy") ||
+      txt.includes("corrosion")
+    ) {
+      return "Metals & Non-Metals";
+    }
+    if (
+      txt.includes("carbon") ||
+      txt.includes("covalent") ||
+      txt.includes("alkane") ||
+      txt.includes("alkene") ||
+      txt.includes("alkyne") ||
+      txt.includes("isomer") ||
+      txt.includes("alcohol") ||
+      txt.includes("hydrocarbon")
+    ) {
+      return "Carbon & Its Compounds";
+    }
+    if (
+      txt.includes("periodic") ||
+      txt.includes("mendeleev") ||
+      txt.includes("atomic radius") ||
+      txt.includes("electronegativ") ||
+      txt.includes("group") ||
+      txt.includes("period")
+    ) {
+      return "Periodic Classification of Elements";
+    }
+    if (
+      txt.includes("reaction") ||
+      txt.includes("equation") ||
+      txt.includes("combination") ||
+      txt.includes("decomposition") ||
+      txt.includes("displacement") ||
+      txt.includes("redox") ||
+      txt.includes("oxidation")
+    ) {
+      return "Chemical Reactions & Equations";
+    }
+    if (
+      txt.includes("mole") ||
+      txt.includes("molar") ||
+      txt.includes("avogadro") ||
+      txt.includes("stoichiometry")
+    ) {
+      return "Mole Concept & Stoichiometry";
+    }
+  }
+
+  // Mathematics concepts
+  if (normSub === "mathematics" || txt.includes("math")) {
+    if (txt.includes("quadratic") || txt.includes("discriminant") || txt.includes("roots of")) {
+      return "Quadratic Equations";
+    }
+    if (
+      txt.includes("arithmetic progression") ||
+      txt.includes("common difference") ||
+      txt.includes("a.p.") ||
+      txt.includes("nth term")
+    ) {
+      return "Arithmetic Progressions";
+    }
+    if (
+      txt.includes("trigonometr") ||
+      txt.includes("sin") ||
+      txt.includes("cos") ||
+      txt.includes("tan") ||
+      txt.includes("cosec") ||
+      txt.includes("sec") ||
+      txt.includes("cot")
+    ) {
+      return "Trigonometry & Identities";
+    }
+    if (txt.includes("height") || txt.includes("elevation") || txt.includes("depression")) {
+      return "Heights & Distances";
+    }
+    if (
+      txt.includes("triangle") ||
+      txt.includes("similarity") ||
+      txt.includes("pythagoras") ||
+      txt.includes("thales") ||
+      txt.includes("congruen")
+    ) {
+      return "Triangles & Geometry";
+    }
+    if (txt.includes("circle") || txt.includes("tangent") || txt.includes("chord") || txt.includes("secant")) {
+      return "Circles & Tangents";
+    }
+    if (
+      txt.includes("surface area") ||
+      txt.includes("volume") ||
+      txt.includes("cylinder") ||
+      txt.includes("cone") ||
+      txt.includes("sphere")
+    ) {
+      return "Surface Areas & Volumes";
+    }
+    if (txt.includes("probability") || txt.includes("dice") || txt.includes("coin") || txt.includes("cards")) {
+      return "Probability";
+    }
+    if (
+      txt.includes("mean") ||
+      txt.includes("median") ||
+      txt.includes("mode") ||
+      txt.includes("frequency distribution") ||
+      txt.includes("ogive")
+    ) {
+      return "Statistics";
+    }
+    if (txt.includes("coordinate") || txt.includes("distance formula") || txt.includes("section formula")) {
+      return "Coordinate Geometry";
+    }
+    if (txt.includes("linear equation") || txt.includes("pair of linear")) {
+      return "Linear Equations in Two Variables";
+    }
+    if (txt.includes("polynomial") || txt.includes("zeroes") || txt.includes("factor theorem")) {
+      return "Polynomials";
+    }
+  }
+
+  // Biology concepts
+  if (normSub === "biology" || normSub === "science" || txt.includes("bio")) {
+    if (
+      txt.includes("photosynthesis") ||
+      txt.includes("respiration") ||
+      txt.includes("digestion") ||
+      txt.includes("excretion") ||
+      txt.includes("circulation") ||
+      txt.includes("heart") ||
+      txt.includes("nephron")
+    ) {
+      return "Life Processes & Physiology";
+    }
+    if (
+      txt.includes("neuron") ||
+      txt.includes("brain") ||
+      txt.includes("reflex") ||
+      txt.includes("hormone") ||
+      txt.includes("endocrine") ||
+      txt.includes("nervous")
+    ) {
+      return "Control & Coordination";
+    }
+    if (
+      txt.includes("reproduction") ||
+      txt.includes("pollination") ||
+      txt.includes("fertilization") ||
+      txt.includes("gamete") ||
+      txt.includes("binary fission") ||
+      txt.includes("budding")
+    ) {
+      return "How Organisms Reproduce";
+    }
+    if (
+      txt.includes("heredity") ||
+      txt.includes("genetics") ||
+      txt.includes("mendel") ||
+      txt.includes("chromosome") ||
+      txt.includes("gene") ||
+      txt.includes("dna")
+    ) {
+      return "Heredity & Evolution";
+    }
+    if (
+      txt.includes("ecosystem") ||
+      txt.includes("food chain") ||
+      txt.includes("trophic") ||
+      txt.includes("ozone") ||
+      txt.includes("biodiversity")
+    ) {
+      return "Our Environment & Ecosystem";
+    }
+    if (
+      txt.includes("cell") ||
+      txt.includes("mitochondria") ||
+      txt.includes("chloroplast") ||
+      txt.includes("nucleus") ||
+      txt.includes("membrane")
+    ) {
+      return "Cell Structure & Function";
+    }
+  }
+
+  if (
+    examTitle &&
+    examTitle.toLowerCase() !== (subject || "").toLowerCase() &&
+    examTitle.toLowerCase() !== "assessment" &&
+    examTitle.toLowerCase() !== "exam" &&
+    examTitle.toLowerCase() !== "mock test"
+  ) {
+    return examTitle;
+  }
+
+  return "Core Conceptual Problem Solving";
+}
+
 /**
  * 1. Deterministically derives factual topic performance from question-level telemetry.
  * QUALIFYING AS WEAK TOPIC: Accuracy < 60% OR (accuracy <= 70% with at least 2 questions).
@@ -241,8 +625,14 @@ export function deriveFactualTopicBreakdown(report: Report): FactualTopicBreakdo
   const topicGroups = new Map<string, DetailedQuestionAnalysis[]>();
 
   analysis.forEach((q, idx) => {
-    const rawTopic = String(q.topic || q.chapter || report.examTitle || "General").trim();
-    const topicKey = rawTopic.length > 0 ? rawTopic : "General";
+    const resolvedTopic = resolveActualTopic(
+      q.topic,
+      q.chapter,
+      report.subject,
+      q.questionText,
+      report.examTitle
+    );
+    const topicKey = resolvedTopic.length > 0 ? resolvedTopic : "Core Concepts";
     if (!topicGroups.has(topicKey)) {
       topicGroups.set(topicKey, []);
     }

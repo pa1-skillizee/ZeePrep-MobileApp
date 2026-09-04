@@ -13,10 +13,18 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import { useAuthStore } from "../../stores/auth-store";
+import { showZeeAlert } from "../../stores/alert-store";
 import { getStudentExams, getStudentExamAttempts } from "../../services/firestore";
 import type { Exam, ExamAttempt } from "../../types";
-import { ZEEPREP_THEME } from "../../constants/theme";
-import { FileText, Clock, ChevronRight, CheckCircle2, PlayCircle, AlertCircle, RefreshCw } from "lucide-react-native";
+import {
+  Brain,
+  Clock,
+  BookOpen,
+  ArrowRight,
+  FileCheck,
+  Lock,
+} from "lucide-react-native";
+import { AnimatedPressable } from "../../components/AnimatedPressable";
 
 export default function StudentExamsScreen() {
   const router = useRouter();
@@ -29,10 +37,21 @@ export default function StudentExamsScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
+  const studentGrade = user?.grade || "12";
+
   const fetchExams = async () => {
     setLoading(true);
     try {
       const data = await getStudentExams(user);
+
+      // Sort exams: multi-level series first by levelNumber, then by createdAt desc
+      data.sort((a, b) => {
+        if (a.seriesId && b.seriesId && a.seriesId === b.seriesId) {
+          return (a.levelNumber || 1) - (b.levelNumber || 1);
+        }
+        return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+      });
+
       setExams(data);
 
       if (user?.uid) {
@@ -60,11 +79,29 @@ export default function StudentExamsScreen() {
     fetchExams();
   };
 
-  const handleExamPress = (exam: Exam, isLimitReached: boolean, maxAttemptsVal: any) => {
+  const handleStartExam = (
+    exam: Exam,
+    isLimitReached: boolean,
+    maxAttemptsSetting: number | string,
+    isLocked: boolean,
+    prerequisiteExamTitle?: string
+  ) => {
+    if (isLocked) {
+      showZeeAlert(
+        "Level Locked",
+        `You must complete and submit ${prerequisiteExamTitle || "the previous level"} before unlocking this level.`,
+        [{ text: "OK" }],
+        "warning"
+      );
+      return;
+    }
+
     if (isLimitReached) {
-      Alert.alert(
+      showZeeAlert(
         "Attempt Limit Reached",
-        `You have used all ${maxAttemptsVal} attempt${maxAttemptsVal === 1 ? "" : "s"} allowed for this examination.`
+        `You have used all ${maxAttemptsSetting} attempts allowed for this examination.`,
+        [{ text: "OK" }],
+        "warning"
       );
       return;
     }
@@ -76,26 +113,31 @@ export default function StudentExamsScreen() {
       style={styles.container}
       contentContainerStyle={[
         styles.contentContainer,
-        isDesktopWeb && { maxWidth: 1280, alignSelf: "center", width: "100%", paddingHorizontal: 32, paddingTop: 24 },
+        isDesktopWeb && styles.desktopContentContainer,
       ]}
       showsVerticalScrollIndicator={false}
       refreshControl={
         <RefreshControl
           refreshing={refreshing}
           onRefresh={onRefresh}
-          tintColor={ZEEPREP_THEME.colors.primary}
+          tintColor="#4F46E5"
         />
       }
     >
+      {/* 1. Page Header */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Assigned Examinations</Text>
+        <Text style={styles.headerTitle}>My Examinations</Text>
         <Text style={styles.headerSubtitle}>
-          Active assessments for Grade {user?.grade || "10"} • {user?.section || "Section A"}
+          Active curriculum assessments for Class {studentGrade}
         </Text>
       </View>
 
+      {/* 2. Examinations List */}
       {loading ? (
-        <ActivityIndicator color={ZEEPREP_THEME.colors.primary} style={{ marginTop: 40 }} />
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator color="#4F46E5" size="large" />
+          <Text style={styles.loadingText}>Loading assigned examinations...</Text>
+        </View>
       ) : exams.length > 0 ? (
         <View style={[styles.examListWrapper, isDesktopWeb && styles.desktopCardGrid]}>
           {exams.map((exam) => {
@@ -105,101 +147,178 @@ export default function StudentExamsScreen() {
             const isUnlimited = maxAttemptsSetting === "unlimited";
             const maxAttemptsNum = isUnlimited ? Infinity : Number(maxAttemptsSetting);
             const isLimitReached = !isUnlimited && usedCount >= maxAttemptsNum;
-            const attemptsRemaining = isUnlimited ? "Unlimited" : Math.max(0, maxAttemptsNum - usedCount);
+            const hasAttempted = usedCount > 0;
+            const lastAttempt = userAttempts[userAttempts.length - 1];
+
+            // Prerequisite checking
+            let isLocked = false;
+            let prerequisiteExamTitle: string | undefined;
+            if (exam.prerequisiteExamId) {
+              const prereqAttempts = attemptsMap[exam.prerequisiteExamId] || [];
+              const isPrereqCompleted = prereqAttempts.length > 0;
+              if (!isPrereqCompleted) {
+                isLocked = true;
+                const prereqExam = exams.find((e) => e.id === exam.prerequisiteExamId);
+                prerequisiteExamTitle = prereqExam?.title || `Level ${exam.levelNumber ? exam.levelNumber - 1 : 1}`;
+              }
+            }
+
+            const subjectTag =
+              exam.subject ||
+              ((exam as any).subjectIds && (exam as any).subjectIds[0]) ||
+              "Academic";
+            const questionCount =
+              (exam as any).questionCount ||
+              ((exam as any).questionIds
+                ? (exam as any).questionIds.length
+                : exam.questions
+                ? exam.questions.length
+                : 25);
+            const durationMins =
+              exam.durationMinutes || (exam as any).duration || 60;
+            const difficultyLevel =
+              exam.levelNumber ? `Level ${exam.levelNumber}` : (exam.level || (exam as any).difficulty || "Standard");
 
             return (
-              <TouchableOpacity
+              <View
                 key={exam.id}
                 style={[
                   styles.examCard,
-                  isLimitReached && styles.examCardDisabled,
+                  isLocked && { opacity: 0.85, borderColor: "#E2E8F0" },
                   isDesktopWeb && styles.desktopCardItem,
                 ]}
-                onPress={() => handleExamPress(exam, isLimitReached, maxAttemptsSetting)}
-                activeOpacity={isLimitReached ? 0.9 : 0.85}
               >
-              <View style={styles.cardHeader}>
-                <View style={styles.subjectChip}>
-                  <Text style={styles.subjectChipText}>{exam.subject?.toUpperCase() || "ASSESSMENT"}</Text>
-                </View>
-                <View style={styles.timeBadge}>
-                  <Clock size={12} color="#D97706" />
-                  <Text style={styles.timeBadgeText}>{exam.durationMinutes || 60} Mins</Text>
-                </View>
-              </View>
-
-              <Text style={styles.examTitle}>{exam.title}</Text>
-
-              {/* Requirement 31.10: Show Attempt Rules to Student */}
-              <View style={styles.attemptMetaRow}>
-                <View style={styles.attemptPillTag}>
-                  <RefreshCw size={11} color="#475569" />
-                  <Text style={styles.attemptPillTagText}>
-                    Max Attempts: {isUnlimited ? "Unlimited" : maxAttemptsSetting}
-                  </Text>
-                </View>
-                <View style={styles.attemptPillTag}>
-                  <Text style={styles.attemptPillTagText}>
-                    Used: {usedCount} {isUnlimited ? "" : `/ ${maxAttemptsSetting}`}
-                  </Text>
-                </View>
-                {!isUnlimited ? (
-                  <View
-                    style={[
-                      styles.attemptPillTag,
-                      isLimitReached
-                        ? { backgroundColor: "#FEF2F2" }
-                        : { backgroundColor: "#ECFDF5" },
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.attemptPillTagText,
-                        { color: isLimitReached ? "#DC2626" : "#059669", fontWeight: "700" },
-                      ]}
-                    >
-                      Remaining: {attemptsRemaining}
+                {/* Top Row: Subject Meta & Status */}
+                <View style={styles.cardHeader}>
+                  <View style={styles.headerLeftGroup}>
+                    <FileCheck size={18} color="#4F46E5" />
+                    <Text style={styles.subjectMetaText}>
+                      {String(subjectTag || "Academic").toUpperCase()} • {String(difficultyLevel || "Standard").toUpperCase()}
                     </Text>
                   </View>
-                ) : null}
-              </View>
 
-              {isLimitReached ? (
-                <View style={styles.limitReachedNotice}>
-                  <AlertCircle size={14} color="#DC2626" />
-                  <Text style={styles.limitNoticeText}>
-                    Attempt Limit Reached (Used {usedCount} / {maxAttemptsSetting})
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                    {exam.examType && (
+                      <View style={{ backgroundColor: "#F1F5F9", paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6, borderWidth: 1, borderColor: "#E2E8F0" }}>
+                        <Text style={{ fontSize: 10, fontWeight: "700", color: "#475569", textTransform: "capitalize" }}>
+                          {exam.examType.replace(/_/g, " ")}
+                        </Text>
+                      </View>
+                    )}
+                    <View
+                      style={[
+                        styles.statusPill,
+                        hasAttempted
+                          ? styles.statusPillCompleted
+                          : isLocked
+                          ? { backgroundColor: "#F1F5F9" }
+                          : styles.statusPillActive,
+                      ]}
+                    >
+                      {isLocked && <Lock size={11} color="#64748B" style={{ marginRight: 3 }} />}
+                      <Text
+                        style={[
+                          styles.statusPillText,
+                          hasAttempted
+                            ? styles.statusPillTextCompleted
+                            : isLocked
+                            ? { color: "#64748B" }
+                            : styles.statusPillTextActive,
+                        ]}
+                      >
+                        {hasAttempted ? "Completed" : isLocked ? "Locked" : "Active"}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+
+                {/* Title & Description / Code */}
+                <View style={styles.cardBody}>
+                  <Text style={styles.examTitle}>{exam.title}</Text>
+                  <Text style={styles.examCode} numberOfLines={2}>
+                    {isLocked
+                      ? `🔒 Requires completion of ${prerequisiteExamTitle}`
+                      : exam.description || (exam as any).code || "Assessment Paper"}
                   </Text>
                 </View>
-              ) : null}
 
-              <View style={styles.cardFooter}>
-                <Text style={styles.marksText}>Total Marks: {exam.totalMarks || 100}</Text>
-                <View style={[styles.startBtn, isLimitReached && styles.startBtnDisabled]}>
-                  {isLimitReached ? (
-                    <AlertCircle size={16} color="#94A3B8" />
-                  ) : (
-                    <PlayCircle size={16} color="#FFFFFF" />
-                  )}
-                  <Text style={[styles.startBtnText, isLimitReached && styles.startBtnTextDisabled]}>
-                    {isLimitReached
-                      ? "Limit Reached"
-                      : usedCount > 0
-                      ? `Start Attempt ${usedCount + 1}`
-                      : "Start Exam"}
-                  </Text>
+                {/* Bottom Row: Qs, Time, Attempt Badge, CTA Button */}
+                <View style={styles.cardFooter}>
+                  <View style={styles.metaRow}>
+                    <View style={styles.metaItem}>
+                      <BookOpen size={14} color="#64748B" />
+                      <Text style={styles.metaText}>{questionCount} Qs</Text>
+                    </View>
+                    <View style={styles.metaItem}>
+                      <Clock size={14} color="#64748B" />
+                      <Text style={styles.metaText}>{durationMins} mins</Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.actionGroup}>
+                    {hasAttempted ? (
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                        <AnimatedPressable
+                          style={styles.scorecardBtn}
+                          onPress={() =>
+                            router.push(`/results/${lastAttempt?.id || exam.id}` as any)
+                          }
+                          scaleTo={0.94}
+                        >
+                          <Text style={styles.scorecardBtnText}>Scorecard</Text>
+                          <ArrowRight size={13} color="#4F46E5" />
+                        </AnimatedPressable>
+
+                        {!isLimitReached && !isLocked && (
+                          <AnimatedPressable
+                            style={[styles.startBtn, { backgroundColor: "#16A34A" }]}
+                            onPress={() =>
+                              handleStartExam(exam, isLimitReached, maxAttemptsSetting, isLocked)
+                            }
+                            scaleTo={0.94}
+                          >
+                            <Text style={styles.startBtnText}>Retake</Text>
+                          </AnimatedPressable>
+                        )}
+                      </View>
+                    ) : isLocked ? (
+                      <TouchableOpacity
+                        style={[styles.startBtn, { backgroundColor: "#F1F5F9" }]}
+                        onPress={() =>
+                          handleStartExam(exam, isLimitReached, maxAttemptsSetting, isLocked, prerequisiteExamTitle)
+                        }
+                        activeOpacity={0.7}
+                      >
+                        <Lock size={12} color="#64748B" />
+                        <Text style={[styles.startBtnText, { color: "#64748B" }]}>
+                          Level {exam.levelNumber || 2} Locked
+                        </Text>
+                      </TouchableOpacity>
+                    ) : (
+                      <AnimatedPressable
+                        style={styles.startBtn}
+                        onPress={() =>
+                          handleStartExam(exam, isLimitReached, maxAttemptsSetting, isLocked)
+                        }
+                        scaleTo={0.95}
+                      >
+                        <Text style={styles.startBtnText}>Start Exam</Text>
+                        <ArrowRight size={13} color="#FFFFFF" />
+                      </AnimatedPressable>
+                    )}
+                  </View>
                 </View>
               </View>
-            </TouchableOpacity>
-          );
-        })}
+            );
+          })}
         </View>
       ) : (
+        /* Empty State */
         <View style={styles.emptyCard}>
-          <FileText size={40} color={ZEEPREP_THEME.colors.textMuted} />
-          <Text style={styles.emptyTitle}>No Active Exams</Text>
+          <BookOpen size={40} color="#94A3B8" style={{ marginBottom: 10 }} />
+          <Text style={styles.emptyTitle}>No examinations available</Text>
           <Text style={styles.emptySub}>
-            There are currently no active assessments assigned to your grade and section.
+            Your faculty has not published any examinations for your class at this time.
           </Text>
         </View>
       )}
@@ -210,171 +329,48 @@ export default function StudentExamsScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: ZEEPREP_THEME.colors.background,
+    backgroundColor: "#F8FAFC",
   },
   contentContainer: {
-    paddingHorizontal: 20,
-    paddingTop: 54,
-    paddingBottom: 40,
+    paddingHorizontal: 16,
+    paddingTop: Platform.OS === "android" ? 44 : 20,
+    paddingBottom: 56,
+  },
+  desktopContentContainer: {
+    maxWidth: 1140,
+    alignSelf: "center",
+    width: "100%",
+    paddingHorizontal: 32,
+    paddingTop: 28,
   },
   header: {
     marginBottom: 20,
   },
   headerTitle: {
-    fontSize: 24,
-    fontWeight: "800",
-    color: ZEEPREP_THEME.colors.textPrimary,
+    fontSize: 20,
+    fontWeight: "700",
+    color: "#0F172A",
+    letterSpacing: -0.3,
   },
   headerSubtitle: {
-    fontSize: 13,
-    color: ZEEPREP_THEME.colors.textSecondary,
-    marginTop: 4,
-  },
-  examCard: {
-    backgroundColor: ZEEPREP_THEME.colors.surface,
-    borderRadius: 20,
-    padding: 18,
-    marginBottom: 14,
-    borderWidth: 1,
-    borderColor: ZEEPREP_THEME.colors.border,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.03,
-    shadowRadius: 10,
-    elevation: 2,
-  },
-  cardHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 12,
-  },
-  subjectChip: {
-    backgroundColor: ZEEPREP_THEME.colors.primaryLight,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-  subjectChipText: {
-    fontSize: 11,
-    fontWeight: "800",
-    color: ZEEPREP_THEME.colors.primary,
-  },
-  timeBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    backgroundColor: "#FEF3C7",
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-  timeBadgeText: {
-    fontSize: 11,
-    color: "#D97706",
-    fontWeight: "700",
-  },
-  examTitle: {
-    fontSize: 17,
-    fontWeight: "700",
-    color: ZEEPREP_THEME.colors.textPrimary,
-    marginBottom: 16,
-  },
-  cardFooter: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: "#F1F5F9",
-  },
-  marksText: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: ZEEPREP_THEME.colors.textSecondary,
-  },
-  startBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    backgroundColor: ZEEPREP_THEME.colors.primary,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 10,
-  },
-  startBtnText: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: "#FFFFFF",
-  },
-  examCardDisabled: {
-    opacity: 0.85,
-    backgroundColor: "#FAFAFA",
-  },
-  attemptMetaRow: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 6,
-    marginBottom: 12,
-  },
-  attemptPillTag: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    backgroundColor: "#F1F5F9",
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-  },
-  attemptPillTagText: {
-    fontSize: 11,
-    color: "#475569",
-    fontWeight: "600",
-  },
-  limitReachedNotice: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    backgroundColor: "#FEF2F2",
-    padding: 8,
-    borderRadius: 8,
-    marginBottom: 12,
-  },
-  limitNoticeText: {
     fontSize: 12,
-    color: "#DC2626",
-    fontWeight: "700",
+    color: "#64748B",
+    marginTop: 3,
+    fontWeight: "500",
   },
-  startBtnDisabled: {
-    backgroundColor: "#E2E8F0",
-  },
-  startBtnTextDisabled: {
-    color: "#94A3B8",
-  },
-  emptyCard: {
-    backgroundColor: ZEEPREP_THEME.colors.surface,
-    borderRadius: 20,
-    padding: 32,
+  loadingContainer: {
     alignItems: "center",
     justifyContent: "center",
-    borderWidth: 1,
-    borderColor: ZEEPREP_THEME.colors.border,
-    marginTop: 20,
-    gap: 8,
+    paddingVertical: 60,
+    gap: 12,
   },
-  emptyTitle: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: ZEEPREP_THEME.colors.textPrimary,
-  },
-  emptySub: {
+  loadingText: {
     fontSize: 13,
-    color: ZEEPREP_THEME.colors.textSecondary,
-    textAlign: "center",
-    lineHeight: 18,
+    fontWeight: "500",
+    color: "#64748B",
   },
   examListWrapper: {
-    gap: 14,
+    gap: 12,
   },
   desktopCardGrid: {
     flexDirection: "row",
@@ -382,9 +378,155 @@ const styles = StyleSheet.create({
     gap: 16,
   },
   desktopCardItem: {
-    flex: 1,
-    minWidth: 340,
-    maxWidth: "49%",
-    marginBottom: 0,
+    width: "48%",
+  },
+  examCard: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    gap: 12,
+  },
+  cardHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  headerLeftGroup: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  subjectMetaText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#475569",
+    letterSpacing: 0.3,
+  },
+  statusPill: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 4,
+    borderWidth: 1,
+  },
+  statusPillCompleted: {
+    backgroundColor: "#F1F5F9",
+    borderColor: "#E2E8F0",
+  },
+  statusPillActive: {
+    backgroundColor: "#F0FDF4",
+    borderColor: "#BBF7D0",
+  },
+  statusPillText: {
+    fontSize: 10,
+    fontWeight: "700",
+  },
+  statusPillTextCompleted: {
+    color: "#64748B",
+  },
+  statusPillTextActive: {
+    color: "#16A34A",
+  },
+  cardBody: {
+    gap: 2,
+  },
+  examTitle: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#0F172A",
+  },
+  examCode: {
+    fontSize: 12,
+    color: "#64748B",
+    lineHeight: 16,
+  },
+  cardFooter: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: "#F1F5F9",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  metaRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  metaItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  metaText: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: "#64748B",
+  },
+  actionGroup: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  attemptCompletedNote: {
+    fontSize: 11,
+    color: "#64748B",
+    fontWeight: "500",
+  },
+  scorecardBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "#EEF2FF",
+    borderWidth: 1,
+    borderColor: "#C7D2FE",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 6,
+  },
+  scorecardBtnText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#4F46E5",
+  },
+  startBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "#4F46E5",
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 6,
+  },
+  startBtnText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#FFFFFF",
+  },
+  emptyCard: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 12,
+    padding: 36,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    width: "100%",
+  },
+  emptyTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#0F172A",
+    marginBottom: 4,
+  },
+  emptySub: {
+    fontSize: 12,
+    color: "#64748B",
+    textAlign: "center",
+    lineHeight: 17,
+    maxWidth: 320,
   },
 });

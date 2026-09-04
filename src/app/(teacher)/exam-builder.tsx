@@ -11,13 +11,19 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import { useAuthStore } from "../../stores/auth-store";
-import { createExam, getQuestionBank } from "../../services/firestore";
+import { showZeeAlert } from "../../stores/alert-store";
+import { getQuestionBank, createExam } from "../../services/firestore";
 import type { Question, MaxAttemptsOption } from "../../types";
 import { ZEEPREP_THEME } from "../../constants/theme";
-import { FileCheck, Sparkles, Plus, CheckCircle2, HelpCircle } from "lucide-react-native";
-import { normalizeQuestion } from "../../utils/question-normalizer";
-
+import { FileCheck, Plus, CheckCircle2, HelpCircle } from "lucide-react-native";
 import { AppHeader } from "../../components/AppHeader";
+import { normalizeQuestion } from "../../utils/question-normalizer";
+import {
+  getSubjectsForGrade,
+  getExamTypesForGrade,
+  ALL_GRADES,
+  ALL_STREAMS,
+} from "../../constants/academic-subjects";
 
 export default function TeacherExamBuilderScreen() {
   const router = useRouter();
@@ -26,6 +32,7 @@ export default function TeacherExamBuilderScreen() {
   const [title, setTitle] = useState("");
   const [subject, setSubject] = useState(user?.subject || "Physics");
   const [grade, setGrade] = useState(user?.grade || "10");
+  const [examType, setExamType] = useState("class_test");
   const [section, setSection] = useState("A");
   const [durationMinutes, setDurationMinutes] = useState("60");
   const [maxAttempts, setMaxAttempts] = useState<MaxAttemptsOption>(1);
@@ -64,12 +71,12 @@ export default function TeacherExamBuilderScreen() {
 
   const handlePublish = async () => {
     if (!title.trim()) {
-      Alert.alert("Missing Title", "Please provide a valid title for the assessment.");
+      showZeeAlert("Missing Title", "Please provide a valid title for the assessment.", [{ text: "OK" }], "warning");
       return;
     }
 
     if (selectedQuestions.length === 0) {
-      Alert.alert("No Questions Selected", "Please select at least 1 question from your Question Bank.");
+      showZeeAlert("No Questions Selected", "Please select at least 1 question from your Question Bank.", [{ text: "OK" }], "warning");
       return;
     }
 
@@ -81,6 +88,7 @@ export default function TeacherExamBuilderScreen() {
           subject: subject.trim(),
           grade: grade.trim(),
           section: section.trim(),
+          examType: examType,
           durationMinutes: parseInt(durationMinutes, 10) || 60,
           totalMarks: computedTotalMarks, // Dynamically computed sum(question.marks)
           maxAttempts: maxAttempts,
@@ -94,10 +102,11 @@ export default function TeacherExamBuilderScreen() {
       );
 
       if (created) {
-        Alert.alert(
+        showZeeAlert(
           "Assessment Published",
           `Successfully created assessment with ${selectedQuestions.length} questions (Total Marks: ${computedTotalMarks}).`,
-          [{ text: "OK", onPress: () => router.push("/(teacher)") }]
+          [{ text: "OK", onPress: () => router.push("/(teacher)") }],
+          "success"
         );
       }
     } catch (err) {
@@ -125,25 +134,125 @@ export default function TeacherExamBuilderScreen() {
             onChangeText={setTitle}
           />
 
+          {/* Class / Grade Selector */}
+          <Text style={styles.inputLabel}>Target Class / Grade</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}>
+            <View style={{ flexDirection: "row", gap: 6 }}>
+              {ALL_GRADES.map((g) => (
+                <TouchableOpacity
+                  key={g}
+                  style={[
+                    styles.attemptPill,
+                    grade === g && styles.attemptPillSelected,
+                    { minWidth: 64, paddingHorizontal: 12 },
+                  ]}
+                  onPress={() => {
+                    setGrade(g);
+                    const subs = getSubjectsForGrade(g);
+                    if (subs.length > 0 && !subs.includes(subject)) {
+                      setSubject(subs[0]);
+                    }
+                    const allowedTypes = getExamTypesForGrade(g);
+                    if (!allowedTypes.find((t) => t.id === examType)) {
+                      setExamType(allowedTypes[0]?.id || "class_test");
+                    }
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[styles.attemptPillText, grade === g && styles.attemptPillTextSelected]}>
+                    Class {g}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </ScrollView>
+
+          {/* Subject Selector for Selected Grade */}
+          <Text style={styles.inputLabel}>Subject</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}>
+            <View style={{ flexDirection: "row", gap: 6 }}>
+              {getSubjectsForGrade(grade).map((sub) => (
+                <TouchableOpacity
+                  key={sub}
+                  style={[
+                    styles.attemptPill,
+                    subject.trim().toLowerCase() === sub.trim().toLowerCase() && styles.attemptPillSelected,
+                    { paddingHorizontal: 12 },
+                  ]}
+                  onPress={() => setSubject(sub)}
+                  activeOpacity={0.8}
+                >
+                  <Text
+                    style={[
+                      styles.attemptPillText,
+                      subject.trim().toLowerCase() === sub.trim().toLowerCase() && styles.attemptPillTextSelected,
+                    ]}
+                  >
+                    {sub}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </ScrollView>
+
+          {/* Requirement: Exam Purpose / Type Selector (Smartly filtered by Class/Grade) */}
+          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+            <Text style={styles.inputLabel}>Exam Type / Purpose</Text>
+            {["8", "10", "12"].includes(grade.replace(/\D/g, "")) && (
+              <View style={{ backgroundColor: "#FEF3C7", paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4 }}>
+                <Text style={{ fontSize: 10, fontWeight: "700", color: "#B45309" }}>
+                  Class {grade} Board Options Enabled
+                </Text>
+              </View>
+            )}
+          </View>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}>
+            <View style={{ flexDirection: "row", gap: 6 }}>
+              {getExamTypesForGrade(grade).map((t) => (
+                <TouchableOpacity
+                  key={t.id}
+                  style={[
+                    styles.attemptPill,
+                    examType === t.id && styles.attemptPillSelected,
+                    t.category === "board" && { borderColor: "#F59E0B" },
+                    t.category === "board" && examType === t.id && { backgroundColor: "#D97706" },
+                    { paddingHorizontal: 12 },
+                  ]}
+                  onPress={() => setExamType(t.id)}
+                  activeOpacity={0.8}
+                >
+                  <Text
+                    style={[
+                      styles.attemptPillText,
+                      examType === t.id && styles.attemptPillTextSelected,
+                    ]}
+                  >
+                    {t.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </ScrollView>
+
           <View style={styles.row}>
             <View style={styles.col}>
-              <Text style={styles.inputLabel}>Subject</Text>
+              <Text style={styles.inputLabel}>Custom Subject / Specification</Text>
               <TextInput
                 style={styles.input}
                 value={subject}
                 onChangeText={setSubject}
-                placeholder="Subject"
+                placeholder="e.g. Mathematics"
                 placeholderTextColor="#94A3B8"
               />
             </View>
 
             <View style={styles.col}>
-              <Text style={styles.inputLabel}>Grade</Text>
+              <Text style={styles.inputLabel}>Section</Text>
               <TextInput
                 style={styles.input}
-                value={grade}
-                onChangeText={setGrade}
-                placeholder="Grade"
+                value={section}
+                onChangeText={setSection}
+                placeholder="e.g. A"
                 placeholderTextColor="#94A3B8"
               />
             </View>

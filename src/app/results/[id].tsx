@@ -13,10 +13,14 @@ import {
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useAuthStore } from "../../stores/auth-store";
+import { showZeeAlert } from "../../stores/alert-store";
 import {
   getStudentReport,
   getStudyResources,
   saveTeacherReviewToReport,
+  requestStudyResourceFromTeacher,
+  getBoardForecastForSubject,
+  getStudentReportsList,
 } from "../../services/firestore";
 import type { Report, TeacherReview } from "../../types";
 import {
@@ -27,7 +31,7 @@ import {
   Target,
   ChevronLeft,
   Home,
-  Sparkles,
+  BrainCircuit,
   Lightbulb,
   FileText,
   Video,
@@ -39,13 +43,19 @@ import {
   MessageSquare,
   Check,
   RefreshCw,
+  Filter,
+  Send,
+  BookOpen,
 } from "lucide-react-native";
 
 import {
   generateTeacherAIReportAnalysis,
   type ReportInsightResult,
+  type StruggledConceptInsight,
 } from "../../services/ai";
 import { resolveOptionText } from "../../utils/answer-evaluator";
+import { deriveMathProblemDiagnosis } from "../../utils/math-diagnostics";
+import { AnimatedPressable } from "../../components/AnimatedPressable";
 import {
   deriveFactualTopicBreakdown,
   matchResourcesLocally,
@@ -57,15 +67,12 @@ import {
   type ResourceItem,
 } from "../../components/ResourceViewerModal";
 import BoardForecastCard from "../../components/BoardForecastCard";
-import { getBoardForecastForSubject, getStudentReportsList } from "../../services/firestore";
 import type {
   SubjectAssessmentProfile,
   BoardForecastSnapshot,
   SubjectForecastRecord,
 } from "../../types/forecast";
 import ReportPdfButton from "../../components/ReportPdfButton";
-import AiReviewPointers from "../../components/AiReviewPointers";
-import { generateReportPointers, type ReportPointers } from "../../services/report-pointers-engine";
 
 export default function ResultsScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -109,23 +116,54 @@ export default function ResultsScreen() {
     user?.role === "student" ? "student" : "faculty"
   );
 
+  // Filter & Interactive Resource Request State
+  const [questionFilter, setQuestionFilter] = useState<"all" | "correct" | "incorrect" | "unanswered">("all");
+  const [requestedTopics, setRequestedTopics] = useState<Set<string>>(new Set());
+  const [requestingTopic, setRequestingTopic] = useState<string | null>(null);
+
+  const handleAskTeacher = async (topic: string) => {
+    if (!user || !report) return;
+    setRequestingTopic(topic);
+    try {
+      const res = await requestStudyResourceFromTeacher(
+        user,
+        topic,
+        (report as any).subject || report.examTitle,
+        report.examTitle,
+        report.id
+      );
+      if (res.success) {
+        setRequestedTopics((prev) => new Set(prev).add(topic));
+        showZeeAlert(
+          "Request Sent to Faculty",
+          `Your teacher has been notified that you need revision study material for "${topic}".`,
+          [{ text: "OK" }],
+          "request_sent"
+        );
+      } else {
+        showZeeAlert("Notice", res.error || "Unable to send notification at this time.", [{ text: "OK" }], "info");
+      }
+    } catch (err: any) {
+      console.error("Ask teacher error:", err);
+      showZeeAlert("Notice", "Could not send notification. Please try again.", [{ text: "OK" }], "error");
+    } finally {
+      setRequestingTopic(null);
+    }
+  };
+
   // ── Board Preparation Forecast (additive; report stays usable if this fails) ──
   const [forecastSnap, setForecastSnap] = useState<BoardForecastSnapshot | null>(null);
   const [forecastProfile, setForecastProfile] = useState<SubjectAssessmentProfile | null>(null);
   const [forecastRecord, setForecastRecord] = useState<SubjectForecastRecord | null>(null);
   const [forecastLoading, setForecastLoading] = useState(false);
-  const [reportPointers, setReportPointers] = useState<ReportPointers | null>(null);
-  const [pointersLoading, setPointersLoading] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    async function loadForecastAndPointers() {
+    async function loadForecast() {
       if (!report || !report.studentId || !report.subject) return;
       setForecastLoading(true);
-      setPointersLoading(true);
-      let allReports: Report[] = [];
       try {
-        allReports = await getStudentReportsList(report.studentId);
+        const allReports = await getStudentReportsList(report.studentId);
         const res = await getBoardForecastForSubject(
           report.studentId,
           { subject: report.subject as string, grade: report.grade, board: report.board },
@@ -141,17 +179,8 @@ export default function ResultsScreen() {
       } finally {
         if (!cancelled) setForecastLoading(false);
       }
-      // Evidence-based AI pointers (separate; report stays usable if this fails)
-      try {
-        const pts = await generateReportPointers(report, allReports);
-        if (!cancelled) setReportPointers(pts);
-      } catch (e2) {
-        console.warn("[ZeePrep] Pointers load notice:", e2);
-      } finally {
-        if (!cancelled) setPointersLoading(false);
-      }
     }
-    loadForecastAndPointers();
+    loadForecast();
     return () => {
       cancelled = true;
     };
@@ -192,11 +221,30 @@ export default function ResultsScreen() {
           setOverallRemark(data.teacherRemarks);
         }
 
-        // Resolve weak topic insights
-        if (Array.isArray(data.weakTopicInsights) && data.weakTopicInsights.length > 0) {
+        // Resolve weak topic insights (ensure no generic subject-name repeats like "Physics")
+        const isGeneric = (t: string | undefined) => {
+          const normT = String(t || "").trim().toLowerCase();
+          const normS = String((data as any).subject || data.examTitle || "").trim().toLowerCase();
+          return (
+            !normT ||
+            normT === normS ||
+            normT === "physics" && normS === "physics" ||
+            normT === "general" ||
+            normT === "general concept" ||
+            normT === "undefined" ||
+            normT === "core concepts"
+          );
+        };
+
+        const hasGenericTopic =
+          !Array.isArray(data.weakTopicInsights) ||
+          data.weakTopicInsights.length === 0 ||
+          data.weakTopicInsights.some((w: any) => isGeneric(w?.topic));
+
+        if (!hasGenericTopic && Array.isArray(data.weakTopicInsights)) {
           setWeakTopicsData(data.weakTopicInsights);
         } else {
-          // Client-side fallback derivation if report was generated earlier
+          // Robust derivation: Extract exact chapter/concept per question using question NLP
           try {
             const topicBreakdowns = deriveFactualTopicBreakdown(data);
             const weakItems = topicBreakdowns.filter((t) => t.isWeak);
@@ -221,6 +269,8 @@ export default function ResultsScreen() {
                 recommendedResources: matchResourcesLocally(wt, eligibleResources),
               }));
               setWeakTopicsData(derived);
+            } else {
+              setWeakTopicsData([]);
             }
           } catch (deriveErr) {
             console.warn("[ZeePrep Results] Notice deriving local weak topics:", deriveErr);
@@ -303,7 +353,7 @@ export default function ResultsScreen() {
 
   const handleOpenResource = (res: any) => {
     if (!res || (!res.url && !res.resourceId && !res.id)) {
-      Alert.alert("Resource Unavailable", "The requested study resource could not be found or has an invalid link.");
+      showZeeAlert("Resource Unavailable", "The requested study resource could not be found or has an invalid link.", [{ text: "OK" }], "warning");
       return;
     }
     setSelectedResource({
@@ -388,13 +438,14 @@ export default function ResultsScreen() {
 
   const handleBackNavigation = () => {
     if (hasUnsavedChanges && isFacultyViewActive) {
-      Alert.alert(
+      showZeeAlert(
         "Unsaved Changes",
         "You have modified teacher remarks or AI insights. Do you want to save before leaving?",
         [
           { text: "Discard", style: "destructive", onPress: () => router.back() },
           { text: "Save Now", onPress: () => handleSaveTeacherReview() },
-        ]
+        ],
+        "warning"
       );
     } else {
       router.back();
@@ -476,6 +527,311 @@ export default function ResultsScreen() {
       : `Class ${report.grade}`
     : "Class 10";
 
+  const renderQuestionAnalysisSection = (isTeacherMode: boolean) => {
+    const allQuestions = report?.detailedAnalysis || [];
+    const filteredQuestions = allQuestions.filter((q) => {
+      const isAnsEmpty = !q.studentAnswer || String(q.studentAnswer).trim() === "";
+      const isCorrect = Boolean(q.isCorrect);
+      if (questionFilter === "correct") return isCorrect;
+      if (questionFilter === "incorrect") return !isCorrect && !isAnsEmpty;
+      if (questionFilter === "unanswered") return isAnsEmpty;
+      return true;
+    });
+
+    return (
+      <View style={styles.cardSection}>
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.cardSectionTitle}>
+            {isTeacherMode ? "QUESTION-BY-QUESTION DIAGNOSTIC ANALYSIS" : "QUESTION-BY-QUESTION REVIEW"}
+          </Text>
+          <Text style={styles.questionCountSub}>
+            {filteredQuestions.length} of {allQuestions.length} Questions
+          </Text>
+        </View>
+
+        {/* Filter Tabs */}
+        <View style={styles.filterTabsRow}>
+          <TouchableOpacity
+            style={[styles.filterTab, questionFilter === "all" && styles.filterTabActive]}
+            onPress={() => setQuestionFilter("all")}
+            activeOpacity={0.8}
+          >
+            <Text style={[styles.filterTabText, questionFilter === "all" && styles.filterTabTextActive]}>
+              All ({allQuestions.length})
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.filterTab, questionFilter === "correct" && styles.filterTabActiveCorrect]}
+            onPress={() => setQuestionFilter("correct")}
+            activeOpacity={0.8}
+          >
+            <Text style={[styles.filterTabText, questionFilter === "correct" && styles.filterTabTextActiveCorrect]}>
+              ✓ Correct ({correctCount})
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.filterTab, questionFilter === "incorrect" && styles.filterTabActiveIncorrect]}
+            onPress={() => setQuestionFilter("incorrect")}
+            activeOpacity={0.8}
+          >
+            <Text style={[styles.filterTabText, questionFilter === "incorrect" && styles.filterTabTextActiveIncorrect]}>
+              ✕ Wrong ({wrongCount})
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.filterTab, questionFilter === "unanswered" && styles.filterTabActiveUnanswered]}
+            onPress={() => setQuestionFilter("unanswered")}
+            activeOpacity={0.8}
+          >
+            <Text style={[styles.filterTabText, questionFilter === "unanswered" && styles.filterTabTextActiveUnanswered]}>
+              ― Skipped ({unansweredCount})
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {filteredQuestions.length > 0 ? (
+          <View style={styles.questionStack}>
+            {filteredQuestions.map((qItem, fIdx) => {
+              const originalIndex = allQuestions.findIndex((q) => q === qItem);
+              const qIdx = originalIndex >= 0 ? originalIndex : fIdx;
+              const isAnsEmpty = !qItem.studentAnswer || String(qItem.studentAnswer).trim() === "";
+              const isCorrect = Boolean(qItem.isCorrect);
+              const qWeight = qItem.marks !== undefined && qItem.marks !== null ? qItem.marks : (qItem.maxMarks || 2);
+              const awarded = isCorrect ? qWeight : 0;
+
+              const resolvedStudent = isAnsEmpty
+                ? "― Not Attempted / Skipped"
+                : resolveOptionText(qItem.studentAnswer, qItem, true);
+              const resolvedCorrect = resolveOptionText(qItem.correctAnswer, qItem, true);
+              const qKey = qItem.questionId || String(qIdx);
+
+              return (
+                <View
+                  key={qKey}
+                  style={[
+                    styles.responsiveQCard,
+                    isCorrect
+                      ? styles.qCardCorrect
+                      : isAnsEmpty
+                      ? styles.qCardUnattempted
+                      : styles.qCardIncorrect,
+                  ]}
+                >
+                  {/* Header */}
+                  <View style={styles.qCardHeader}>
+                    <View style={styles.qNumberBadge}>
+                      <Text style={styles.qNumberText}>Question {qIdx + 1}</Text>
+                      {qItem.topic ? (
+                        <View style={styles.topicMiniTag}>
+                          <Text style={styles.topicMiniTagText} numberOfLines={1}>
+                            {qItem.topic}
+                          </Text>
+                        </View>
+                      ) : null}
+                    </View>
+                    <View
+                      style={[
+                        styles.qResultPill,
+                        isCorrect
+                          ? styles.pillCorrect
+                          : isAnsEmpty
+                          ? styles.pillUnattempted
+                          : styles.pillIncorrect,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.qResultText,
+                          isCorrect
+                            ? styles.pillTextCorrect
+                            : isAnsEmpty
+                            ? styles.pillTextUnattempted
+                            : styles.pillTextIncorrect,
+                        ]}
+                      >
+                        {isCorrect
+                          ? `✓ Correct (+${awarded} / ${qWeight})`
+                          : isAnsEmpty
+                          ? `― Unanswered (0 / ${qWeight})`
+                          : `✕ Wrong (0 / ${qWeight})`}
+                      </Text>
+                    </View>
+                  </View>
+
+                  {/* Question Prompt */}
+                  <Text style={styles.questionPromptText}>{qItem.questionText}</Text>
+
+                  {/* Answers Stack */}
+                  <View style={styles.answersContainer}>
+                    {/* Student Answer */}
+                    <View
+                      style={[
+                        styles.answerBox,
+                        isCorrect
+                          ? styles.answerBoxCorrect
+                          : isAnsEmpty
+                          ? styles.answerBoxUnanswered
+                          : styles.answerBoxIncorrect,
+                      ]}
+                    >
+                      <View style={styles.answerBoxHeader}>
+                        {isCorrect ? (
+                          <CheckCircle2 size={15} color="#059669" />
+                        ) : isAnsEmpty ? (
+                          <HelpCircle size={15} color="#64748B" />
+                        ) : (
+                          <XCircle size={15} color="#DC2626" />
+                        )}
+                        <Text
+                          style={[
+                            styles.answerBoxLabel,
+                            isCorrect
+                              ? styles.answerBoxLabelCorrect
+                              : isAnsEmpty
+                              ? styles.answerBoxLabelUnanswered
+                              : styles.answerBoxLabelIncorrect,
+                          ]}
+                        >
+                          {isTeacherMode ? "STUDENT ANSWER" : "YOUR ANSWER"}
+                        </Text>
+                      </View>
+                      <Text
+                        style={[
+                          styles.answerBoxValue,
+                          isCorrect
+                            ? styles.ansCorrect
+                            : isAnsEmpty
+                            ? styles.ansMuted
+                            : styles.ansIncorrect,
+                        ]}
+                      >
+                        {resolvedStudent}
+                      </Text>
+                    </View>
+
+                    {/* Correct Answer (shown if student was incorrect or skipped) */}
+                    {!isCorrect && (
+                      <View style={[styles.answerBox, styles.answerBoxCorrectKey]}>
+                        <View style={styles.answerBoxHeader}>
+                          <CheckCircle2 size={15} color="#059669" />
+                          <Text style={[styles.answerBoxLabel, styles.answerBoxLabelCorrect]}>
+                            CORRECT ANSWER
+                          </Text>
+                        </View>
+                        <Text style={[styles.answerBoxValue, styles.ansCorrect]}>
+                          {resolvedCorrect}
+                        </Text>
+                      </View>
+                    )}
+
+                    {/* Explanation if present */}
+                    {qItem.explanation ? (
+                      <View style={styles.explanationBox}>
+                        <View style={styles.explanationHeader}>
+                          <Lightbulb size={14} color="#4338CA" />
+                          <Text style={styles.explanationLabel}>SOLUTION & EXPLANATION</Text>
+                        </View>
+                        <Text style={styles.explanationText}>{qItem.explanation}</Text>
+                      </View>
+                    ) : null}
+
+                    {/* Specific Math Diagnostic Breakdown for Struggled Question */}
+                    {!isCorrect && (() => {
+                      const mathDiag = deriveMathProblemDiagnosis(
+                        qItem,
+                        qItem.studentAnswer,
+                        isCorrect,
+                        isAnsEmpty
+                      );
+                      return (
+                        <View style={styles.mathDiagCard}>
+                          <View style={styles.mathDiagHeader}>
+                            <BrainCircuit size={15} color="#4F46E5" />
+                            <Text style={styles.mathDiagTitle}>DIAGNOSTIC MATH BREAKDOWN</Text>
+                          </View>
+                          
+                          <View style={styles.mathProblemTypeBadge}>
+                            <Text style={styles.mathProblemTypeBadgeText}>
+                              📐 {mathDiag.problemType}
+                            </Text>
+                          </View>
+
+                          <View style={styles.mathDiagMetaRow}>
+                            <Text style={styles.mathDiagMetaText}>
+                              <Text style={{ fontWeight: "700", color: "#1E293B" }}>Chapter:</Text> {mathDiag.chapter}  •  <Text style={{ fontWeight: "700", color: "#1E293B" }}>Topic:</Text> {mathDiag.topic}
+                            </Text>
+                          </View>
+
+                          {mathDiag.formulaStruggledWith ? (
+                            <View style={styles.mathFormulaBox}>
+                              <Text style={styles.mathFormulaLabel}>GOVERNING FORMULA STRUGGLED WITH:</Text>
+                              <Text style={styles.mathFormulaText}>{mathDiag.formulaStruggledWith}</Text>
+                            </View>
+                          ) : null}
+
+                          <View style={styles.mathRemedyBox}>
+                            <Text style={styles.mathRemedyLabel}>TARGETED REMEDIAL STEP:</Text>
+                            <Text style={styles.mathRemedyText}>{mathDiag.exactRemedy}</Text>
+                          </View>
+                        </View>
+                      );
+                    })()}
+                  </View>
+
+                  {/* Faculty Question Note (in Teacher View) */}
+                  {isTeacherMode && !isCorrect && (
+                    <View style={styles.qRemarkBox}>
+                      <Text style={styles.qRemarkLabel}>FACULTY NOTE FOR Q{qIdx + 1}:</Text>
+                      <TextInput
+                        style={styles.qRemarkInput}
+                        placeholder="Add specific remedial note for this question..."
+                        placeholderTextColor="#94A3B8"
+                        value={questionRemarks[qKey] || ""}
+                        onChangeText={(t) => {
+                          setQuestionRemarks((prev) => ({ ...prev, [qKey]: t }));
+                          setHasUnsavedChanges(true);
+                        }}
+                      />
+                    </View>
+                  )}
+
+                  {/* Telemetry Metrics Footer */}
+                  <View style={styles.qFooterGrid}>
+                    <View style={styles.qMetricChip}>
+                      <Text style={styles.qMetricChipLabel}>WEIGHT</Text>
+                      <Text style={styles.qMetricChipVal}>{qWeight} Marks</Text>
+                    </View>
+                    <View style={styles.qMetricChip}>
+                      <Text style={styles.qMetricChipLabel}>AWARDED</Text>
+                      <Text
+                        style={[
+                          styles.qMetricChipVal,
+                          isCorrect ? { color: "#059669" } : { color: "#DC2626" },
+                        ]}
+                      >
+                        {awarded} Marks
+                      </Text>
+                    </View>
+                    <View style={styles.qMetricChip}>
+                      <Text style={styles.qMetricChipLabel}>TIME SPENT</Text>
+                      <Text style={styles.qMetricChipVal}>{qItem.timeSpentSeconds || 0}s</Text>
+                    </View>
+                  </View>
+                </View>
+              );
+            })}
+          </View>
+        ) : (
+          <View style={styles.emptyQuestionsBox}>
+            <Text style={styles.emptyQuestionsText}>
+              No questions matching the selected filter ({questionFilter}).
+            </Text>
+          </View>
+        )}
+      </View>
+    );
+  };
+
   return (
     <View style={styles.container}>
       {/* Header Bar */}
@@ -492,7 +848,6 @@ export default function ResultsScreen() {
           forecast={forecastSnap}
           profile={forecastProfile}
           record={forecastRecord}
-          pointers={reportPointers}
           variant={isFacultyViewActive ? "teacher" : "student"}
         />
       </View>
@@ -601,9 +956,6 @@ export default function ResultsScreen() {
               width={forecastWidth}
             />
 
-            {/* AI Review — evidence-based one-line pointers */}
-            <AiReviewPointers pointers={reportPointers} loading={pointersLoading} isDesktopWeb={isDesktopWeb} />
-
             {/* 2. Question Summary Table */}
             <View style={styles.cardSection}>
               <Text style={styles.cardSectionTitle}>QUESTION SUMMARY</Text>
@@ -697,13 +1049,64 @@ export default function ResultsScreen() {
               )}
             </View>
 
+            {/* 4.5. Specific Math Problem Types & Formulas Struggled With */}
+            {wrongCount + unansweredCount > 0 && (
+              <View style={styles.cardSection}>
+                <View style={styles.sectionHeaderRow}>
+                  <Text style={styles.cardSectionTitle}>PROBLEM TYPES & FORMULAS STRUGGLED WITH</Text>
+                  <View style={styles.aiPillBadge}>
+                    <BrainCircuit size={13} color="#4F46E5" />
+                    <Text style={styles.aiPillBadgeText}>AI Diagnostic</Text>
+                  </View>
+                </View>
+
+                <View style={styles.struggledList}>
+                  {(() => {
+                    const allQs = report?.detailedAnalysis || [];
+                    const missed = allQs.filter((q) => !q.isCorrect);
+                    return missed.slice(0, 6).map((q, idx) => {
+                      const origIdx = allQs.findIndex((item) => item === q);
+                      const isUnans = !q.studentAnswer || String(q.studentAnswer).trim() === "";
+                      const diag = deriveMathProblemDiagnosis(q, q.studentAnswer, false, isUnans);
+                      return (
+                        <View key={idx} style={styles.struggledCardItem}>
+                          <View style={styles.struggledItemHeader}>
+                            <View style={styles.struggledQNumPill}>
+                              <Text style={styles.struggledQNumPillText}>Q{origIdx >= 0 ? origIdx + 1 : idx + 1}</Text>
+                            </View>
+                            <Text style={styles.struggledProblemTypeTitle}>{diag.problemType}</Text>
+                          </View>
+
+                          <Text style={styles.struggledChapterTopic}>
+                            Chapter: <Text style={{ color: "#1E293B", fontWeight: "700" }}>{diag.chapter}</Text> • Topic: <Text style={{ color: "#1E293B", fontWeight: "700" }}>{diag.topic}</Text>
+                          </Text>
+
+                          {diag.formulaStruggledWith ? (
+                            <View style={styles.struggledFormulaBox}>
+                              <Text style={styles.struggledFormulaLabel}>Governing Formula:</Text>
+                              <Text style={styles.struggledFormulaText}>{diag.formulaStruggledWith}</Text>
+                            </View>
+                          ) : null}
+
+                          <Text style={styles.struggledRemedyText}>💡 {diag.exactRemedy}</Text>
+                        </View>
+                      );
+                    });
+                  })()}
+                </View>
+              </View>
+            )}
+
             {/* 5. Improve Your Weak Topics (Suggested Resources) */}
             <View style={styles.cardSection}>
               <Text style={styles.cardSectionTitle}>IMPROVE YOUR WEAK TOPICS</Text>
               {weakTopicsData.length > 0 ? (
                 weakTopicsData.map((wt, wtIdx) => (
                   <View key={wtIdx} style={styles.resourceTopicGroup}>
-                    <Text style={styles.resourceTopicTitle}>{wt.topic}</Text>
+                    <View style={styles.resourceTopicHeaderRow}>
+                      <Text style={styles.resourceTopicTitle}>{wt.topic}</Text>
+                      <Text style={styles.resourceTopicAcc}>{wt.accuracy}% Accuracy</Text>
+                    </View>
                     {wt.recommendedResources && wt.recommendedResources.length > 0 ? (
                       <View style={styles.resourcesStack}>
                         {wt.recommendedResources.map((res, rIdx) => {
@@ -742,16 +1145,48 @@ export default function ResultsScreen() {
                       <View style={styles.cleanNoResourceBox}>
                         <HelpCircle size={16} color="#94A3B8" />
                         <Text style={styles.cleanNoResourceText}>
-                          Ask teacher to upload the resource or provide it.
+                          No automated resources mapped yet for this topic.
                         </Text>
                       </View>
                     )}
+
+                    {/* Ask Teacher for Resource Notification Button */}
+                    <TouchableOpacity
+                      style={[
+                        styles.askTeacherBtn,
+                        requestedTopics.has(wt.topic) && styles.askTeacherBtnDone,
+                      ]}
+                      onPress={() => handleAskTeacher(wt.topic)}
+                      disabled={requestedTopics.has(wt.topic) || requestingTopic === wt.topic}
+                      activeOpacity={0.8}
+                    >
+                      {requestingTopic === wt.topic ? (
+                        <ActivityIndicator size="small" color="#4F46E5" />
+                      ) : requestedTopics.has(wt.topic) ? (
+                        <CheckCircle2 size={15} color="#059669" />
+                      ) : (
+                        <Send size={14} color="#4F46E5" />
+                      )}
+                      <Text
+                        style={[
+                          styles.askTeacherBtnText,
+                          requestedTopics.has(wt.topic) && styles.askTeacherBtnTextDone,
+                        ]}
+                      >
+                        {requestedTopics.has(wt.topic)
+                          ? "✓ Request Sent to Faculty"
+                          : `Ask Faculty for "${wt.topic}" Resources`}
+                      </Text>
+                    </TouchableOpacity>
                   </View>
                 ))
               ) : (
                 <Text style={styles.allSetText}>You're all set! Review completed topics in your library.</Text>
               )}
             </View>
+
+            {/* 6. Question-by-Question Detailed Review (Student View) */}
+            {renderQuestionAnalysisSection(false)}
           </View>
         ) : (
           /* ======================================================== */
@@ -854,190 +1289,7 @@ export default function ResultsScreen() {
               width={forecastWidth}
             />
 
-            {/* AI Review — evidence-based one-line pointers */}
-            <AiReviewPointers pointers={reportPointers} loading={pointersLoading} isDesktopWeb={isDesktopWeb} />
-
-            {/* 1. Editable AI Faculty Insights Section */}
-            <View style={styles.sectionHeaderRow}>
-              <Text style={styles.sectionTitleWithoutMargin}>Faculty AI Insights</Text>
-              <TouchableOpacity
-                style={styles.editToggleBtn}
-                onPress={() => {
-                  setIsEditingAi(!isEditingAi);
-                  setHasUnsavedChanges(true);
-                }}
-              >
-                <Edit3 size={14} color="#4F46E5" />
-                <Text style={styles.editToggleText}>
-                  {isEditingAi ? "Done Editing" : "Edit Insights"}
-                </Text>
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.aiDiagnosticCard}>
-              <View style={styles.aiHeaderRow}>
-                <Sparkles size={18} color="#4F46E5" />
-                <Text style={styles.aiDiagnosticTitle}>Diagnostic Evaluation</Text>
-                {isAiEditedByTeacher && (
-                  <View style={styles.editedBadge}>
-                    <Text style={styles.editedBadgeText}>Edited by Faculty</Text>
-                  </View>
-                )}
-              </View>
-
-              {aiLoading ? (
-                <View style={{ paddingVertical: 16, alignItems: "center" }}>
-                  <ActivityIndicator color="#4F46E5" size="small" />
-                  <Text style={{ fontSize: 12, color: "#64748B", marginTop: 6 }}>
-                    Evaluating student telemetry...
-                  </Text>
-                </View>
-              ) : isEditingAi ? (
-                /* Editable Form Mode */
-                <View style={styles.editableAiContainer}>
-                  <Text style={styles.inputFieldLabel}>REVIEW POINTERS (One per line)</Text>
-                  <TextInput
-                    style={[styles.fieldInput, styles.multilineInput]}
-                    value={editedAiReviewPointers}
-                    onChangeText={(t) => {
-                      setEditedAiReviewPointers(t);
-                      setHasUnsavedChanges(true);
-                    }}
-                    multiline
-                    numberOfLines={4}
-                    placeholder="e.g. Revise quadratic formula concepts&#10;Review multi-step calculation errors"
-                    placeholderTextColor="#94A3B8"
-                  />
-
-                  <Text style={styles.inputFieldLabel}>WEAK TOPICS (Comma Separated)</Text>
-                  <TextInput
-                    style={styles.fieldInput}
-                    value={editedAiWeakTopics}
-                    onChangeText={(t) => {
-                      setEditedAiWeakTopics(t);
-                      setHasUnsavedChanges(true);
-                    }}
-                    placeholder="e.g. Linear Equations, Coordinate Geometry"
-                    placeholderTextColor="#94A3B8"
-                  />
-
-                  <Text style={styles.inputFieldLabel}>STRONG TOPICS (Comma Separated)</Text>
-                  <TextInput
-                    style={styles.fieldInput}
-                    value={editedAiStrongTopics}
-                    onChangeText={(t) => {
-                      setEditedAiStrongTopics(t);
-                      setHasUnsavedChanges(true);
-                    }}
-                    placeholder="e.g. Real Numbers, Polynomials"
-                    placeholderTextColor="#94A3B8"
-                  />
-
-                  <Text style={styles.inputFieldLabel}>CONCEPTUAL GAPS (One per line)</Text>
-                  <TextInput
-                    style={[styles.fieldInput, styles.multilineInput]}
-                    value={editedAiGaps}
-                    onChangeText={(t) => {
-                      setEditedAiGaps(t);
-                      setHasUnsavedChanges(true);
-                    }}
-                    multiline
-                    numberOfLines={3}
-                    placeholder="e.g. Difficulty with multi-step equation balancing"
-                    placeholderTextColor="#94A3B8"
-                  />
-
-                  <Text style={styles.inputFieldLabel}>TEACHING RECOMMENDATIONS (One per line)</Text>
-                  <TextInput
-                    style={[styles.fieldInput, styles.multilineInput]}
-                    value={editedAiAdvice}
-                    onChangeText={(t) => {
-                      setEditedAiAdvice(t);
-                      setHasUnsavedChanges(true);
-                    }}
-                    multiline
-                    numberOfLines={3}
-                    placeholder="e.g. Assign 10 worksheet problems on linear equations"
-                    placeholderTextColor="#94A3B8"
-                  />
-                </View>
-              ) : aiInsight ? (
-                /* Display View Mode */
-                <View style={{ gap: 14 }}>
-                  {/* Actionable Review Pointers */}
-                  {Array.isArray(aiInsight.reviewPointers) && aiInsight.reviewPointers.length > 0 && (
-                    <View style={styles.aiTagSection}>
-                      <Text style={styles.aiTagLabel}>ACTIONABLE REVIEW POINTERS</Text>
-                      <View style={styles.aiPointersList}>
-                        {aiInsight.reviewPointers.map((pointer: string, pIdx: number) => (
-                          <View key={pIdx} style={styles.aiPointerItem}>
-                            <CheckCircle2 size={15} color="#4F46E5" style={{ marginTop: 2 }} />
-                            <Text style={styles.aiPointerText}>{typeof pointer === "string" ? pointer : String(pointer)}</Text>
-                          </View>
-                        ))}
-                      </View>
-                    </View>
-                  )}
-
-                  {Array.isArray(aiInsight.weakTopics) && aiInsight.weakTopics.length > 0 && (
-                    <View style={styles.aiTagSection}>
-                      <Text style={styles.aiTagLabel}>WEAK TOPICS & REVISION FOCUS</Text>
-                      <View style={styles.aiTagRow}>
-                        {aiInsight.weakTopics.map((t: string, idx: number) => (
-                          <View key={idx} style={styles.weakTag}>
-                            <Text style={styles.weakTagText}>{typeof t === "string" ? t : String(t)}</Text>
-                          </View>
-                        ))}
-                      </View>
-                    </View>
-                  )}
-
-                  {Array.isArray(aiInsight.strongTopics) && aiInsight.strongTopics.length > 0 && (
-                    <View style={styles.aiTagSection}>
-                      <Text style={styles.aiTagLabel}>STRONG TOPICS</Text>
-                      <View style={styles.aiTagRow}>
-                        {aiInsight.strongTopics.map((t: string, idx: number) => (
-                          <View key={idx} style={styles.strongTag}>
-                            <Text style={styles.strongTagText}>{typeof t === "string" ? t : String(t)}</Text>
-                          </View>
-                        ))}
-                      </View>
-                    </View>
-                  )}
-
-                  {Array.isArray(aiInsight.conceptualGaps) && aiInsight.conceptualGaps.length > 0 && (
-                    <View style={styles.aiTagSection}>
-                      <Text style={styles.aiTagLabel}>CONCEPTUAL GAPS</Text>
-                      <View style={styles.aiTagRow}>
-                        {aiInsight.conceptualGaps.map((g: string, idx: number) => (
-                          <View key={idx} style={styles.weakTag}>
-                            <Text style={styles.weakTagText}>{typeof g === "string" ? g : String(g)}</Text>
-                          </View>
-                        ))}
-                      </View>
-                    </View>
-                  )}
-
-                  {Array.isArray(aiInsight.actionableAdvice) && aiInsight.actionableAdvice.length > 0 && (
-                    <View style={styles.aiTagSection}>
-                      <Text style={styles.aiTagLabel}>TEACHING RECOMMENDATIONS</Text>
-                      {aiInsight.actionableAdvice.map((a: string, idx: number) => (
-                        <View key={idx} style={styles.aiRecommendationBox}>
-                          <Lightbulb size={14} color="#D97706" />
-                          <Text style={styles.aiRecommendationText}>{typeof a === "string" ? a : String(a)}</Text>
-                        </View>
-                      ))}
-                    </View>
-                  )}
-                </View>
-              ) : (
-                <Text style={{ fontSize: 13, color: "#64748B" }}>
-                  Diagnostic telemetry calculated from test performance.
-                </Text>
-              )}
-            </View>
-
-            {/* 2. Overall Teacher Remarks & Observations */}
+            {/* 1. Overall Teacher Remarks & Observations */}
             <Text style={styles.sectionTitle}>Teacher Remarks & Academic Observations</Text>
             <View style={styles.remarksCard}>
               <View style={styles.remarksHeaderRow}>
@@ -1129,133 +1381,8 @@ export default function ResultsScreen() {
               )}
             </View>
 
-            {/* Complete Itemized Question Analysis */}
-            <Text style={styles.sectionTitle}>Question-by-Question Analysis</Text>
-            {report.detailedAnalysis && report.detailedAnalysis.length > 0 ? (
-              <View style={styles.questionStack}>
-                {report.detailedAnalysis.map((qItem, qIdx) => {
-                  const isAnsEmpty =
-                    !qItem.studentAnswer || String(qItem.studentAnswer).trim() === "";
-                  const isCorrect = Boolean(qItem.isCorrect);
-                  const qWeight =
-                    qItem.marks !== undefined && qItem.marks !== null ? qItem.marks : 1;
-                  const awarded = isCorrect ? qWeight : 0;
-
-                  const resolvedStudent = isAnsEmpty
-                    ? "― Unanswered"
-                    : resolveOptionText(qItem.studentAnswer, qItem, true);
-                  const resolvedCorrect = resolveOptionText(qItem.correctAnswer, qItem, true);
-                  const qKey = qItem.questionId || String(qIdx);
-
-                  return (
-                    <View
-                      key={qKey}
-                      style={[
-                        styles.qCard,
-                        isCorrect
-                          ? styles.qCardCorrect
-                          : isAnsEmpty
-                          ? styles.qCardUnattempted
-                          : styles.qCardIncorrect,
-                      ]}
-                    >
-                      {/* Card Header */}
-                      <View style={styles.qCardHeader}>
-                        <Text style={styles.qNumberText}>Question {qIdx + 1}</Text>
-                        <View
-                          style={[
-                            styles.qResultPill,
-                            isCorrect
-                              ? styles.pillCorrect
-                              : isAnsEmpty
-                              ? styles.pillUnattempted
-                              : styles.pillIncorrect,
-                          ]}
-                        >
-                          <Text
-                            style={[
-                              styles.qResultText,
-                              isCorrect
-                                ? styles.pillTextCorrect
-                                : isAnsEmpty
-                                ? styles.pillTextUnattempted
-                                : styles.pillTextIncorrect,
-                            ]}
-                          >
-                            {isCorrect
-                              ? `✓ Correct (+${awarded} / ${qWeight})`
-                              : isAnsEmpty
-                              ? `― Unanswered (0 / ${qWeight})`
-                              : `✕ Wrong (0 / ${qWeight})`}
-                          </Text>
-                        </View>
-                      </View>
-
-                      {/* Question Prompt */}
-                      <Text style={styles.fieldLabel}>Question:</Text>
-                      <Text style={styles.questionPromptText}>{qItem.questionText}</Text>
-
-                      {/* Topic */}
-                      {qItem.topic ? (
-                        <Text style={styles.qTopicText}>Topic: {qItem.topic}</Text>
-                      ) : null}
-
-                      {/* Student Answer */}
-                      <Text style={styles.fieldLabel}>Student Answer:</Text>
-                      <Text
-                        style={[
-                          styles.answerValueText,
-                          isCorrect
-                            ? styles.ansCorrect
-                            : isAnsEmpty
-                            ? styles.ansMuted
-                            : styles.ansIncorrect,
-                        ]}
-                      >
-                        {resolvedStudent}
-                      </Text>
-
-                      {/* Correct Answer */}
-                      <Text style={styles.fieldLabel}>Correct Answer:</Text>
-                      <Text style={[styles.answerValueText, styles.ansCorrect]}>
-                        {resolvedCorrect}
-                      </Text>
-
-                      {/* Optional Question-Specific Teacher Remark */}
-                      {!isCorrect && (
-                        <View style={styles.qRemarkBox}>
-                          <Text style={styles.qRemarkLabel}>FACULTY NOTE FOR Q{qIdx + 1}:</Text>
-                          <TextInput
-                            style={styles.qRemarkInput}
-                            placeholder="Add specific question feedback..."
-                            placeholderTextColor="#94A3B8"
-                            value={questionRemarks[qKey] || ""}
-                            onChangeText={(t) => {
-                              setQuestionRemarks((prev) => ({ ...prev, [qKey]: t }));
-                              setHasUnsavedChanges(true);
-                            }}
-                          />
-                        </View>
-                      )}
-
-                      {/* Card Footer Metrics */}
-                      <View style={styles.qFooterRow}>
-                        <Text style={styles.qFooterText}>
-                          Time: {qItem.timeSpentSeconds || 0} sec
-                        </Text>
-                        <Text style={styles.qFooterText}>
-                          Marks: {awarded} / {qWeight}
-                        </Text>
-                      </View>
-                    </View>
-                  );
-                })}
-              </View>
-            ) : (
-              <Text style={{ fontSize: 13, color: "#64748B", marginBottom: 16 }}>
-                Question-level telemetry unavailable.
-              </Text>
-            )}
+            {/* Complete Itemized Question Analysis (Shown AFTER AI and Teacher Remarks) */}
+            {renderQuestionAnalysisSection(true)}
           </View>
         )}
 
@@ -2091,38 +2218,182 @@ const styles = StyleSheet.create({
     fontWeight: "500",
   },
 
-  questionStack: {
-    gap: 12,
+  resourceTopicHeaderRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 8,
   },
-  qCard: {
+  resourceTopicAcc: {
+    fontSize: 11,
+    fontWeight: "800",
+    color: "#D97706",
+    backgroundColor: "#FEF3C7",
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+
+  askTeacherBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    backgroundColor: "#EEF2FF",
+    borderWidth: 1,
+    borderColor: "#C7D2FE",
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    marginTop: 10,
+  },
+  askTeacherBtnDone: {
+    backgroundColor: "#ECFDF5",
+    borderColor: "#A7F3D0",
+  },
+  askTeacherBtnText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#4F46E5",
+  },
+  askTeacherBtnTextDone: {
+    color: "#059669",
+  },
+
+  aiGapsList: {
+    gap: 8,
+    marginTop: 2,
+  },
+  aiGapItem: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    backgroundColor: "#FEF2F2",
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#FECACA",
+  },
+  aiGapText: {
+    fontSize: 12,
+    color: "#991B1B",
+    fontWeight: "600",
+    flex: 1,
+    lineHeight: 18,
+  },
+
+  questionCountSub: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#64748B",
+  },
+
+  filterTabsRow: {
+    flexDirection: "row",
+    gap: 6,
+    marginVertical: 10,
+    flexWrap: "wrap",
+  },
+  filterTab: {
+    backgroundColor: "#F1F5F9",
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+  },
+  filterTabActive: {
+    backgroundColor: "#0F172A",
+    borderColor: "#0F172A",
+  },
+  filterTabActiveCorrect: {
+    backgroundColor: "#059669",
+    borderColor: "#059669",
+  },
+  filterTabActiveIncorrect: {
+    backgroundColor: "#DC2626",
+    borderColor: "#DC2626",
+  },
+  filterTabActiveUnanswered: {
+    backgroundColor: "#475569",
+    borderColor: "#475569",
+  },
+  filterTabText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#475569",
+  },
+  filterTabTextActive: {
+    color: "#FFFFFF",
+  },
+  filterTabTextActiveCorrect: {
+    color: "#FFFFFF",
+  },
+  filterTabTextActiveIncorrect: {
+    color: "#FFFFFF",
+  },
+  filterTabTextActiveUnanswered: {
+    color: "#FFFFFF",
+  },
+
+  questionStack: {
+    gap: 14,
+  },
+  responsiveQCard: {
     backgroundColor: "#FFFFFF",
     borderRadius: 16,
     padding: 16,
     borderWidth: 1,
     borderColor: "#E2E8F0",
+    gap: 12,
+    shadowColor: "#0F172A",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    elevation: 2,
   },
   qCardCorrect: {
-    borderLeftWidth: 4,
+    borderLeftWidth: 5,
     borderLeftColor: "#10B981",
   },
   qCardIncorrect: {
-    borderLeftWidth: 4,
+    borderLeftWidth: 5,
     borderLeftColor: "#EF4444",
   },
   qCardUnattempted: {
-    borderLeftWidth: 4,
+    borderLeftWidth: 5,
     borderLeftColor: "#94A3B8",
   },
   qCardHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 8,
+    gap: 8,
+  },
+  qNumberBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flex: 1,
+    flexWrap: "wrap",
   },
   qNumberText: {
     fontSize: 14,
     fontWeight: "800",
     color: "#0F172A",
+  },
+  topicMiniTag: {
+    backgroundColor: "#EEF2FF",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: "#C7D2FE",
+  },
+  topicMiniTagText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#4F46E5",
   },
   qResultPill: {
     paddingHorizontal: 10,
@@ -2131,12 +2402,18 @@ const styles = StyleSheet.create({
   },
   pillCorrect: {
     backgroundColor: "#ECFDF5",
+    borderWidth: 1,
+    borderColor: "#A7F3D0",
   },
   pillIncorrect: {
     backgroundColor: "#FEF2F2",
+    borderWidth: 1,
+    borderColor: "#FECACA",
   },
   pillUnattempted: {
     backgroundColor: "#F1F5F9",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
   },
   qResultText: {
     fontSize: 11,
@@ -2151,76 +2428,168 @@ const styles = StyleSheet.create({
   pillTextUnattempted: {
     color: "#64748B",
   },
-  fieldLabel: {
-    fontSize: 11,
-    fontWeight: "700",
-    color: "#64748B",
-    marginTop: 6,
-    textTransform: "uppercase",
-  },
+
   questionPromptText: {
     fontSize: 13,
-    color: "#1E293B",
-    lineHeight: 18,
-    marginTop: 2,
-    fontWeight: "500",
+    color: "#0F172A",
+    lineHeight: 20,
+    fontWeight: "600",
   },
-  qTopicText: {
-    fontSize: 11,
-    color: "#6366F1",
-    fontWeight: "700",
-    marginTop: 4,
+
+  answersContainer: {
+    gap: 10,
   },
-  answerValueText: {
+  answerBox: {
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    gap: 6,
+  },
+  answerBoxCorrect: {
+    backgroundColor: "#F0FDF4",
+    borderColor: "#BBF7D0",
+  },
+  answerBoxIncorrect: {
+    backgroundColor: "#FEF2F2",
+    borderColor: "#FECACA",
+  },
+  answerBoxUnanswered: {
+    backgroundColor: "#F8FAFC",
+    borderColor: "#E2E8F0",
+  },
+  answerBoxCorrectKey: {
+    backgroundColor: "#ECFDF5",
+    borderColor: "#6EE7B7",
+  },
+  answerBoxHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  answerBoxLabel: {
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 0.5,
+  },
+  answerBoxLabelCorrect: {
+    color: "#065F46",
+  },
+  answerBoxLabelIncorrect: {
+    color: "#991B1B",
+  },
+  answerBoxLabelUnanswered: {
+    color: "#64748B",
+  },
+  answerBoxValue: {
     fontSize: 13,
-    fontWeight: "700",
-    marginTop: 2,
+    lineHeight: 19,
+    fontWeight: "600",
   },
   ansCorrect: {
-    color: "#059669",
+    color: "#065F46",
   },
   ansIncorrect: {
-    color: "#DC2626",
+    color: "#991B1B",
   },
   ansMuted: {
-    color: "#94A3B8",
+    color: "#64748B",
+    fontStyle: "italic",
   },
+
+  explanationBox: {
+    backgroundColor: "#EEF2FF",
+    borderWidth: 1,
+    borderColor: "#C7D2FE",
+    borderRadius: 10,
+    padding: 12,
+    gap: 4,
+    marginTop: 2,
+  },
+  explanationHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  explanationLabel: {
+    fontSize: 10,
+    fontWeight: "800",
+    color: "#4338CA",
+    letterSpacing: 0.5,
+  },
+  explanationText: {
+    fontSize: 12,
+    color: "#312E81",
+    lineHeight: 18,
+    fontWeight: "500",
+  },
+
   qRemarkBox: {
     backgroundColor: "#FFFBEB",
-    borderRadius: 8,
-    padding: 8,
-    marginTop: 10,
+    borderRadius: 10,
+    padding: 10,
     borderWidth: 1,
     borderColor: "#FDE68A",
+    gap: 6,
   },
   qRemarkLabel: {
     fontSize: 10,
     fontWeight: "800",
     color: "#92400E",
-    marginBottom: 4,
+    letterSpacing: 0.5,
   },
   qRemarkInput: {
     backgroundColor: "#FFFFFF",
     borderWidth: 1,
     borderColor: "#FDE68A",
-    borderRadius: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
     fontSize: 12,
     color: "#0F172A",
   },
-  qFooterRow: {
+
+  qFooterGrid: {
     flexDirection: "row",
-    justifyContent: "space-between",
-    borderTopWidth: 1,
-    borderTopColor: "#F1F5F9",
-    paddingTop: 8,
-    marginTop: 10,
+    gap: 8,
+    marginTop: 2,
   },
-  qFooterText: {
-    fontSize: 11,
-    color: "#94A3B8",
-    fontWeight: "600",
+  qMetricChip: {
+    flex: 1,
+    backgroundColor: "#F8FAFC",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    borderRadius: 10,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    alignItems: "center",
+  },
+  qMetricChipLabel: {
+    fontSize: 9,
+    fontWeight: "700",
+    color: "#64748B",
+    letterSpacing: 0.5,
+  },
+  qMetricChipVal: {
+    fontSize: 12,
+    fontWeight: "800",
+    color: "#0F172A",
+    marginTop: 2,
+  },
+
+  emptyQuestionsBox: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 12,
+    padding: 24,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  emptyQuestionsText: {
+    fontSize: 13,
+    color: "#64748B",
+    fontWeight: "500",
+    textAlign: "center",
   },
 
   homeBtn: {
@@ -2237,5 +2606,173 @@ const styles = StyleSheet.create({
     color: "#FFFFFF",
     fontSize: 15,
     fontWeight: "700",
+  },
+
+  // Math Diagnostic Question Breakdown Styles
+  mathDiagCard: {
+    backgroundColor: "#F8FAFC",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    borderRadius: 12,
+    padding: 12,
+    marginTop: 8,
+    gap: 8,
+  },
+  mathDiagHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  mathDiagTitle: {
+    fontSize: 11,
+    fontWeight: "800",
+    color: "#4F46E5",
+    letterSpacing: 0.5,
+  },
+  mathProblemTypeBadge: {
+    backgroundColor: "#EEF2FF",
+    borderWidth: 1,
+    borderColor: "#C7D2FE",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    alignSelf: "flex-start",
+  },
+  mathProblemTypeBadgeText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#3730A3",
+  },
+  mathDiagMetaRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  mathDiagMetaText: {
+    fontSize: 12,
+    color: "#475569",
+    lineHeight: 18,
+  },
+  mathFormulaBox: {
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "#CBD5E1",
+    borderRadius: 8,
+    padding: 10,
+    gap: 4,
+  },
+  mathFormulaLabel: {
+    fontSize: 10,
+    fontWeight: "800",
+    color: "#0F172A",
+    letterSpacing: 0.5,
+  },
+  mathFormulaText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#4338CA",
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+  },
+  mathRemedyBox: {
+    backgroundColor: "#F0FDF4",
+    borderWidth: 1,
+    borderColor: "#BBF7D0",
+    borderRadius: 8,
+    padding: 8,
+    gap: 3,
+  },
+  mathRemedyLabel: {
+    fontSize: 10,
+    fontWeight: "800",
+    color: "#166534",
+    letterSpacing: 0.5,
+  },
+  mathRemedyText: {
+    fontSize: 12,
+    color: "#14532D",
+    lineHeight: 18,
+    fontWeight: "500",
+  },
+
+  // Overview Struggled Section Styles
+  aiPillBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "#EEF2FF",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#C7D2FE",
+  },
+  aiPillBadgeText: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: "#4F46E5",
+  },
+  struggledList: {
+    gap: 10,
+  },
+  struggledCardItem: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    padding: 12,
+    gap: 6,
+  },
+  struggledItemHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  struggledQNumPill: {
+    backgroundColor: "#FEE2E2",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  struggledQNumPillText: {
+    fontSize: 11,
+    fontWeight: "800",
+    color: "#DC2626",
+  },
+  struggledProblemTypeTitle: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#0F172A",
+    flex: 1,
+  },
+  struggledChapterTopic: {
+    fontSize: 12,
+    color: "#64748B",
+  },
+  struggledFormulaBox: {
+    backgroundColor: "#F8FAFC",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    borderRadius: 8,
+    padding: 8,
+  },
+  struggledFormulaLabel: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: "#64748B",
+    marginBottom: 2,
+  },
+  struggledFormulaText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#4338CA",
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+  },
+  struggledRemedyText: {
+    fontSize: 12,
+    color: "#166534",
+    lineHeight: 18,
+    fontWeight: "500",
+    backgroundColor: "#F0FDF4",
+    padding: 8,
+    borderRadius: 6,
   },
 });

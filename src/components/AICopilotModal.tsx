@@ -9,7 +9,7 @@ import {
   ActivityIndicator,
   Platform,
 } from "react-native";
-import { Bot, X, Send, Sparkles, AlertCircle, CheckCircle2, TrendingUp } from "lucide-react-native";
+import { Bot, X, Send, Zap, AlertCircle, CheckCircle2, TrendingUp } from "lucide-react-native";
 import { useAuthStore, isSuperAdminUser } from "../stores/auth-store";
 
 interface AICopilotModalProps {
@@ -116,7 +116,7 @@ export function AICopilotModal({ isOpen, onClose }: AICopilotModalProps) {
                   {isSuperadmin ? "Institutional AI Copilot" : "Academic AI Copilot"}
                 </Text>
                 <View style={styles.liveDataBadge}>
-                  <Sparkles size={10} color="#818CF8" />
+                  <Zap size={11} color="#818CF8" />
                   <Text style={styles.liveDataBadgeText}>Live Firebase Data</Text>
                 </View>
               </View>

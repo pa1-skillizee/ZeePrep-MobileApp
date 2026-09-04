@@ -11,6 +11,7 @@ export interface User {
   approvalStatus?: "pending" | "approved" | "rejected";
   emailVerified?: boolean;
   avatarUrl?: string;
+  photoURL?: string;
   phone?: string;
   schoolName?: string;
   schoolId?: string;
@@ -23,6 +24,17 @@ export interface User {
   assignedSections?: string[];
   subjectIds?: string[];
   subject?: string;
+  subjects?: string[];
+  lastLoginIp?: string;
+  lastLoginAt?: any;
+  lastLoginPlatform?: string;
+  lastLoginDevice?: string;
+  loginHistory?: Array<{
+    ip: string;
+    timestamp: any;
+    platform?: string;
+    userAgent?: string;
+  }>;
   createdAt?: any;
   updatedAt?: any;
 }
@@ -88,7 +100,12 @@ export interface Exam {
   questions?: Question[];
   status: "draft" | "published" | "active" | "archived";
   startTime?: any;
-  endTime?: any;
+  level?: string;
+  examType?: string; // class_test | unit_test | quarterly | half_yearly | annual | pre_board | board | competitive_mock
+  prerequisiteExamId?: string;
+  seriesId?: string;
+  levelNumber?: number;
+  totalLevels?: number;
   createdBy: string;
   createdByName?: string;
   createdAt?: any;
@@ -127,11 +144,14 @@ export interface DetailedQuestionAnalysis {
   isCorrect: boolean;
   isUnanswered?: boolean;
   marks?: number;
+  maxMarks?: number;
   awardedMarks?: number;
   timeSpentSeconds: number;
   chapter?: string;
   topic?: string;
   level?: QuestionLevel;
+  explanation?: string;
+  options?: string[];
 }
 
 export interface Report {
@@ -257,4 +277,44 @@ export interface ClassGrade {
   board: string;
   sections: string[]; // ["A", "B", "C"]
   streams?: string[]; // ["Science", "Commerce", "Arts"]
+}
+
+export interface LeaderboardEntry {
+  id: string;
+  studentId: string;
+  studentName: string;
+  studentEmail?: string;
+  avatarUrl?: string;
+  grade?: string;
+  section?: string;
+  schoolName?: string;
+  bestPercentage: number;
+  avgPercentage: number;
+  accuracy: number;
+  totalAssessments: number;
+  totalMarksObtained: number;
+  totalMarksPossible: number;
+  latestExamTitle?: string;
+  subject?: string;
+  rank?: number;
+  xpPoints?: number;
+  lastActiveDate?: string;
+}
+
+export interface LoginAuditRecord {
+  id: string;
+  uid: string;
+  name: string;
+  email: string;
+  loginId?: string;
+  role: UserRole;
+  schoolName?: string;
+  grade?: string;
+  section?: string;
+  ipAddress: string;
+  platform?: string;
+  device?: string;
+  timestamp: string;
+  status: "success" | "failed";
+  createdAt?: any;
 }

@@ -30,6 +30,7 @@ import {
   School,
   CheckCircle2,
 } from "lucide-react-native";
+import { getSubjectsForGrade, ALL_GRADES } from "../../constants/academic-subjects";
 
 export default function RegisterScreen() {
   const router = useRouter();
@@ -315,42 +316,88 @@ export default function RegisterScreen() {
                 </View>
 
                 <View style={[styles.inputGroup, { flex: 1 }]}>
-                  <Text style={styles.inputLabel}>Grade / Class</Text>
-                  <View style={styles.inputWrapper}>
-                    <TextInput
-                      style={styles.input}
-                      value={grade}
-                      onChangeText={setGrade}
-                    />
-                  </View>
-                </View>
-              </View>
-
-              <View style={styles.academicRow}>
-                <View style={[styles.inputGroup, { flex: 1 }]}>
                   <Text style={styles.inputLabel}>Section</Text>
                   <View style={styles.inputWrapper}>
                     <TextInput
                       style={styles.input}
                       value={section}
                       onChangeText={setSection}
+                      placeholder="e.g. A"
+                      placeholderTextColor="#94A3B8"
                     />
                   </View>
                 </View>
-
-                {role === "teacher" ? (
-                  <View style={[styles.inputGroup, { flex: 1 }]}>
-                    <Text style={styles.inputLabel}>Assigned Subject</Text>
-                    <View style={styles.inputWrapper}>
-                      <TextInput
-                        style={styles.input}
-                        value={subject}
-                        onChangeText={setSubject}
-                      />
-                    </View>
-                  </View>
-                ) : null}
               </View>
+
+              {/* Class / Grade Selector Pills */}
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Grade / Class</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 4 }}>
+                  <View style={{ flexDirection: "row", gap: 6 }}>
+                    {ALL_GRADES.map((g) => {
+                      const isSel = grade === `Grade ${g}` || grade === g;
+                      return (
+                        <TouchableOpacity
+                          key={g}
+                          style={[
+                            styles.roleTab,
+                            isSel && styles.roleTabActive,
+                            { paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8, minWidth: 68 },
+                          ]}
+                          onPress={() => {
+                            setGrade(g);
+                            const subs = getSubjectsForGrade(g);
+                            if (subs.length > 0 && !subs.includes(subject)) {
+                              setSubject(subs[0]);
+                            }
+                          }}
+                        >
+                          <Text style={[styles.roleTabText, isSel && styles.roleTabTextActive, { fontSize: 12 }]}>
+                            Class {g}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </ScrollView>
+              </View>
+
+              {role === "teacher" ? (
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>Assigned Teaching Subject (Class {grade})</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginVertical: 6 }}>
+                    <View style={{ flexDirection: "row", gap: 6 }}>
+                      {getSubjectsForGrade(grade).map((sub) => {
+                        const isSel = subject.trim().toLowerCase() === sub.trim().toLowerCase();
+                        return (
+                          <TouchableOpacity
+                            key={sub}
+                            style={[
+                              styles.roleTab,
+                              isSel && styles.roleTabActive,
+                              { paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8 },
+                            ]}
+                            onPress={() => setSubject(sub)}
+                          >
+                            <Text style={[styles.roleTabText, isSel && styles.roleTabTextActive, { fontSize: 12 }]}>
+                              {sub}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  </ScrollView>
+                  <View style={styles.inputWrapper}>
+                    <TextInput
+                      style={styles.input}
+                      value={subject}
+                      onChangeText={setSubject}
+                      placeholder="e.g. Mathematics"
+                      placeholderTextColor="#94A3B8"
+                    />
+                  </View>
+                </View>
+              ) : null}
 
               {/* Submit Registration */}
               <TouchableOpacity

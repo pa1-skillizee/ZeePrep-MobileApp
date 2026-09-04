@@ -12,12 +12,15 @@ import {
   Alert,
   Platform,
   useWindowDimensions,
+  Image,
 } from "react-native";
-import { getAllUsers, updateUserAccountStatus, deleteUserAccountPermanently } from "../../services/firestore";
+import { useRouter } from "expo-router";
 import { useAuthStore } from "../../stores/auth-store";
+import { showZeeAlert } from "../../stores/alert-store";
+import { getAllUsers, updateUserAccountStatus, deleteUserAccountPermanently } from "../../services/firestore";
 import type { User, UserRole } from "../../types";
 import { ZEEPREP_THEME } from "../../constants/theme";
-import { Users, Search, ShieldCheck, Trash2, AlertTriangle, X, UserX, UserCheck } from "lucide-react-native";
+import { Users, Search, ShieldCheck, Trash2, AlertTriangle, X, UserX, UserCheck, Globe } from "lucide-react-native";
 
 import { AppHeader } from "../../components/AppHeader";
 
@@ -66,7 +69,7 @@ export default function AdminUserManagementScreen() {
         prev.map((u) => (u.uid === userToUpdate.uid ? { ...u, status: newStatus } : u))
       );
     } else {
-      Alert.alert("Error", "Failed to update user account status.");
+      showZeeAlert("Error", "Failed to update user account status.", [{ text: "OK" }], "error");
     }
   };
 
@@ -79,9 +82,9 @@ export default function AdminUserManagementScreen() {
         setUsers((prev) => prev.filter((u) => u.uid !== targetDeleteUser.uid));
         setTargetDeleteUser(null);
         setConfirmInput("");
-        Alert.alert("User Removed", `Account ${targetDeleteUser.email} permanently deleted.`);
+        showZeeAlert("User Removed", `Account ${targetDeleteUser.email} permanently deleted.`, [{ text: "OK" }], "success");
       } else {
-        Alert.alert("Error", "Failed to delete user account.");
+        showZeeAlert("Error", "Failed to delete user account.", [{ text: "OK" }], "error");
       }
     } catch (err) {
       console.error("User deletion error:", err);
@@ -154,15 +157,39 @@ export default function AdminUserManagementScreen() {
             <View key={u.uid} style={styles.userCard}>
               <View style={styles.userCardInfo}>
                 <View style={styles.userNameRow}>
-                  <Text style={styles.userName}>{u.name}</Text>
-                  <View style={[styles.roleTag, u.role === "teacher" && styles.roleTagTeacher]}>
-                    <Text style={styles.roleTagText}>{u.role ? String(u.role).toUpperCase() : "USER"}</Text>
+                  {u.avatarUrl || u.photoURL ? (
+                    <Image source={{ uri: u.avatarUrl || u.photoURL }} style={styles.userCardAvatar} />
+                  ) : (
+                    <View style={styles.userCardAvatarFallback}>
+                      <Text style={styles.userCardAvatarText}>{(u.name || "U").charAt(0).toUpperCase()}</Text>
+                    </View>
+                  )}
+                  <View style={{ flex: 1 }}>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                      <Text style={styles.userName}>{u.name}</Text>
+                      <View style={[styles.roleTag, u.role === "teacher" && styles.roleTagTeacher]}>
+                        <Text style={styles.roleTagText}>{u.role ? String(u.role).toUpperCase() : "USER"}</Text>
+                      </View>
+                    </View>
+                    <Text style={styles.userEmail}>{u.email}</Text>
                   </View>
                 </View>
-                <Text style={styles.userEmail}>{u.email}</Text>
+
                 <Text style={styles.userMeta}>
-                  ID: {u.loginId || "N/A"} • {u.grade ? `Grade ${u.grade}` : "Faculty Member"}
+                  ID: {u.loginId || "N/A"} • {u.grade ? `Grade ${u.grade}` : u.role === "teacher" ? "Faculty Member" : "Administrator"}
                 </Text>
+
+                {/* Login IP Address Badge */}
+                <View style={styles.ipBadgeRow}>
+                  <Globe size={13} color="#4F46E5" />
+                  <Text style={styles.ipBadgeLabel}>Last IP:</Text>
+                  <Text style={styles.ipBadgeValue}>{u.lastLoginIp || "Not logged yet"}</Text>
+                  {u.lastLoginAt && (
+                    <Text style={styles.ipBadgeTime}>
+                      • {new Date(u.lastLoginAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    </Text>
+                  )}
+                </View>
               </View>
 
               {/* Action Buttons Row */}
@@ -336,10 +363,31 @@ const styles = StyleSheet.create({
   userNameRow: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
+    gap: 12,
+    marginBottom: 8,
+  },
+  userCardAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: 1.5,
+    borderColor: "#4F46E5",
+  },
+  userCardAvatarFallback: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "#4F46E5",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  userCardAvatarText: {
+    fontSize: 18,
+    fontWeight: "800",
+    color: "#FFFFFF",
   },
   userName: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: "700",
     color: ZEEPREP_THEME.colors.textPrimary,
   },
@@ -358,14 +406,42 @@ const styles = StyleSheet.create({
     color: ZEEPREP_THEME.colors.primary,
   },
   userEmail: {
-    fontSize: 13,
+    fontSize: 12,
     color: ZEEPREP_THEME.colors.textSecondary,
-    marginTop: 2,
+    marginTop: 1,
   },
   userMeta: {
     fontSize: 12,
     color: ZEEPREP_THEME.colors.textMuted,
-    marginTop: 4,
+    marginTop: 2,
+  },
+  ipBadgeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: "#EEF2FF",
+    alignSelf: "flex-start",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: "#C7D2FE",
+    marginTop: 6,
+  },
+  ipBadgeLabel: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: "#4338CA",
+  },
+  ipBadgeValue: {
+    fontSize: 10,
+    fontWeight: "800",
+    color: "#1E1B4B",
+  },
+  ipBadgeTime: {
+    fontSize: 10,
+    color: "#6366F1",
+    fontWeight: "500",
   },
   actionRow: {
     flexDirection: "row",

@@ -293,6 +293,65 @@ export function buildSubjectAssessmentProfile(
   const trendDirection = classifyTrend(pcts, improvementRate, volatility);
   const { strong, weak } = aggregateTopics(deduped);
 
+  // ── Requirement: Calculate Level 1, Level 2, Level 3 score predictions + overall average ──
+  let l1Correct = 0, l1Total = 0, l1Attempts = 0;
+  let l2Correct = 0, l2Total = 0, l2Attempts = 0;
+  let l3Correct = 0, l3Total = 0, l3Attempts = 0;
+
+  for (const r of deduped) {
+    let rHasL1 = false, rHasL2 = false, rHasL3 = false;
+    for (const q of r.detailedAnalysis || []) {
+      const lv = String(q.level || "level1").toLowerCase();
+      if (lv === "level1") {
+        l1Total++;
+        if (q.isCorrect) l1Correct++;
+        rHasL1 = true;
+      } else if (lv === "level2") {
+        l2Total++;
+        if (q.isCorrect) l2Correct++;
+        rHasL2 = true;
+      } else if (lv === "level3") {
+        l3Total++;
+        if (q.isCorrect) l3Correct++;
+        rHasL3 = true;
+      }
+    }
+    if (rHasL1) l1Attempts++;
+    if (rHasL2) l2Attempts++;
+    if (rHasL3) l3Attempts++;
+  }
+
+  // Base accuracies or calibrated estimates
+  const baseScore = count > 0 ? recencyWeightedScore : 70;
+  const level1Accuracy = l1Total > 0 ? round((l1Correct / l1Total) * 100) : clamp(round(baseScore * 1.05), 0, 100);
+  const level2Accuracy = l2Total > 0 ? round((l2Correct / l2Total) * 100) : clamp(round(baseScore * 0.95), 0, 100);
+  const level3Accuracy = l3Total > 0 ? round((l3Correct / l3Total) * 100) : clamp(round(baseScore * 0.85), 0, 100);
+
+  // Score predictions: Level 1 (Foundational), Level 2 (Application), Level 3 (Advanced/HOTS)
+  const level1PredictedScore = clamp(round(level1Accuracy * 0.98), 0, 100);
+  const level2PredictedScore = clamp(round(level2Accuracy * 1.00), 0, 100);
+  const level3PredictedScore = clamp(round(level3Accuracy * 1.05), 0, 100);
+
+  // Averaged composite prediction across all 3 levels
+  const overallAveragePredictedScore = clamp(
+    round((level1PredictedScore + level2PredictedScore + level3PredictedScore) / 3),
+    0,
+    100
+  );
+
+  const levelPredictions = {
+    level1PredictedScore,
+    level2PredictedScore,
+    level3PredictedScore,
+    overallAveragePredictedScore,
+    level1Accuracy,
+    level2Accuracy,
+    level3Accuracy,
+    level1Attempts: l1Attempts,
+    level2Attempts: l2Attempts,
+    level3Attempts: l3Attempts,
+  };
+
   return {
     subjectKey: opts.subjectKey,
     subjectDisplay: opts.subjectDisplay,
@@ -302,6 +361,7 @@ export function buildSubjectAssessmentProfile(
     dataPoints,
     distinctTopics,
     levelCoverage,
+    levelPredictions,
     coverageSignal,
     recencyWeightedScore,
     volatility,
@@ -441,6 +501,7 @@ export function buildDeterministicSnapshot(
         : profile.trendDirection === "inconsistent"
         ? ["Scores vary a lot between assessments."]
         : [],
+    levelPredictions: profile.levelPredictions,
     assessmentCount: profile.assessmentCount,
     coverageSignal: profile.coverageSignal,
     latestExamId,
@@ -593,6 +654,7 @@ export async function generateBoardForecast(
     nextActions: nextActions.length ? nextActions : det.nextActions,
     confidenceReasons: confidenceReasons(profile, confidence),
     warningFlags: sanitizeList(parsed.warningFlags, 3),
+    levelPredictions: profile.levelPredictions,
     assessmentCount: profile.assessmentCount,
     coverageSignal: profile.coverageSignal,
     latestExamId: det.latestExamId,

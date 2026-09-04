@@ -12,13 +12,15 @@ import {
   addDoc,
   deleteDoc,
   serverTimestamp,
+  onSnapshot,
 } from "firebase/firestore";
 import { ref as storageRefFn, uploadBytes, getDownloadURL } from "firebase/storage";
 import { Platform } from "react-native";
 import * as SecureStore from "expo-secure-store";
 import { db, storage } from "../lib/firebase";
+import { normalizeGrade } from "../utils/grade-normalizer";
+import { resolveActualTopic } from "./weak-topic-resource-engine";
 import { normalizeQuestionOption } from "../utils/question-normalizer";
-import { normalizeGrade } from "./weak-topic-resource-engine";
 import { validateExamComposition } from "../utils/exam-validator";
 import type {
   User,
@@ -71,9 +73,32 @@ export async function createOrUpdateUserProfile(user: Partial<User> & { uid: str
   }
 }
 
+async function convertUriToBase64DataUrl(uri: string): Promise<string> {
+  try {
+    const response = await fetch(uri);
+    const blob = await response.blob();
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        if (typeof reader.result === "string") {
+          resolve(reader.result);
+        } else {
+          resolve(uri);
+        }
+      };
+      reader.onerror = () => resolve(uri);
+      reader.readAsDataURL(blob);
+    });
+  } catch (e) {
+    console.warn("Base64 conversion fallback failed, keeping raw uri:", e);
+    return uri;
+  }
+}
+
 /**
  * Updates a user's profile photo.
- * If given a local file uri, uploads it to Firebase Storage and saves the resulting URL to Firestore.
+ * If given a local file uri, attempts upload to Firebase Storage,
+ * and automatically falls back to Base64 Data URI directly in Firestore if Storage is unauthorized.
  */
 export async function updateUserProfilePhoto(
   uid: string,
@@ -82,15 +107,29 @@ export async function updateUserProfilePhoto(
   try {
     let finalUrl = photoUriOrUrl;
 
-    // If local file URI (file://, blob:, ph://), upload to Firebase Storage
-    if (!photoUriOrUrl.startsWith("http://") && !photoUriOrUrl.startsWith("https://")) {
+    // If local file URI (file://, blob:, ph://, content://), try upload or convert to base64 Data URL
+    if (
+      !photoUriOrUrl.startsWith("http://") &&
+      !photoUriOrUrl.startsWith("https://") &&
+      !photoUriOrUrl.startsWith("data:")
+    ) {
+      let uploadedToStorage = false;
       if (storage) {
-        const storagePath = `profile_photos/${uid}/${Date.now()}_avatar.jpg`;
-        const storageRef = storageRefFn(storage, storagePath);
-        const response = await fetch(photoUriOrUrl);
-        const blob = await response.blob();
-        await uploadBytes(storageRef, blob);
-        finalUrl = await getDownloadURL(storageRef);
+        try {
+          const storagePath = `profile_photos/${uid}/${Date.now()}_avatar.jpg`;
+          const storageRef = storageRefFn(storage, storagePath);
+          const response = await fetch(photoUriOrUrl);
+          const blob = await response.blob();
+          await uploadBytes(storageRef, blob);
+          finalUrl = await getDownloadURL(storageRef);
+          uploadedToStorage = true;
+        } catch (storageErr) {
+          console.warn("[ZeePrep] Firebase Storage write unauthorized, falling back to direct Base64 Data URL:", storageErr);
+        }
+      }
+
+      if (!uploadedToStorage) {
+        finalUrl = await convertUriToBase64DataUrl(photoUriOrUrl);
       }
     }
 
@@ -395,6 +434,7 @@ export async function getStudentExams(user: User | null): Promise<Exam[]> {
     }
 
     const exams: Exam[] = [];
+    const studentGradeNormalized = user.grade ? normalizeGrade(String(user.grade)) : "";
 
     snapshot.forEach((docSnap) => {
       const data = docSnap.data() as Exam;
@@ -402,8 +442,15 @@ export async function getStudentExams(user: User | null): Promise<Exam[]> {
 
       // Ensure status is published (unless admin/teacher)
       if (status !== "published" && status !== "active") return;
+      if ((data as any).isArchived) return;
 
-      if (user.grade && data.grade && normalizeGrade(String(data.grade)) !== normalizeGrade(String(user.grade))) return;
+      // Strict grade matching:
+      // If student has a grade (e.g. 11), exam must have a matching grade.
+      // Ungraded or mismatch test exams are hidden from student view and kept for superadmin.
+      if (studentGradeNormalized) {
+        if (!data.grade) return;
+        if (normalizeGrade(String(data.grade)) !== studentGradeNormalized) return;
+      }
       if (user.section && data.section && String(data.section).trim().toUpperCase() !== String(user.section).trim().toUpperCase()) return;
       if (user.stream && data.stream && String(data.stream).trim().toLowerCase() !== String(user.stream).trim().toLowerCase()) return;
 
@@ -484,6 +531,7 @@ export async function createExam(examData: Partial<Exam>, creator?: User | null)
       passingPercentage: examData.passingPercentage || 40,
       negativeMarkingEnabled: examData.negativeMarkingEnabled || false,
       maxAttempts: examData.maxAttempts || 1,
+      examType: examData.examType || "class_test",
       instructions: examData.instructions || ["Read all questions carefully.", "Attempt all mandatory sections."],
       questionIds: examData.questionIds || [],
       status: examData.status || "published",
@@ -1241,7 +1289,7 @@ export async function getTeacherReports(teacher: User): Promise<Report[]> {
     let list = Array.from(reportsMap.values());
 
     // Filter by teacher authorization (School / Grade / Section / Subject)
-    if (teacher && teacher.role === "teacher") {
+    if (teacher && teacher.role === "teacher" && teacher.email !== "pa1@skillizee.io") {
       list = list.filter((rep) => {
         // School ID check if present on both teacher & report
         if (
@@ -1357,19 +1405,35 @@ export async function getStudentReportsList(studentId: string): Promise<Report[]
 
 export async function getStudyResources(user: User | null, subject?: string): Promise<StudyResource[]> {
   try {
-    const q = query(collection(db, "study_resources"), orderBy("createdAt", "desc"), limit(50));
+    const q = query(collection(db, "study_resources"), orderBy("createdAt", "desc"), limit(100));
     const snapshot = await getDocs(q);
     const resources: StudyResource[] = [];
+
+    const studentGrade = user?.grade ? normalizeGrade(user.grade) : "";
 
     snapshot.forEach((docSnap) => {
       const data = docSnap.data() as StudyResource;
 
       if (user?.role === "student") {
-        if (user.grade && data.grade && data.grade !== user.grade) return;
-        if (user.section && data.section && data.section !== user.section) return;
+        // Strict Class Filter:
+        if (studentGrade) {
+          const resGrade = normalizeGrade(data.grade || "");
+          if (!resGrade || resGrade !== studentGrade) return;
+        }
+
+        // Section & Stream Filters:
+        if (user.section && data.section && data.section.toLowerCase() !== "all" && data.section !== user.section) return;
+        if (user.stream && data.stream && data.stream.toLowerCase() !== "all" && data.stream.toLowerCase() !== user.stream.toLowerCase()) return;
+
+        // Subject Filter:
+        if (Array.isArray(user.subjects) && user.subjects.length > 0 && data.subject) {
+          const enrolled = user.subjects.map((s) => normalizeSubject(s));
+          const resSub = normalizeSubject(data.subject);
+          if (resSub && resSub !== "General" && !enrolled.includes(resSub)) return;
+        }
       }
 
-      if (subject && subject !== "All" && data.subject !== subject) return;
+      if (subject && subject !== "All" && normalizeSubject(data.subject) !== normalizeSubject(subject)) return;
 
       resources.push({ ...data, id: docSnap.id });
     });
@@ -1447,6 +1511,116 @@ export async function requestStudyResourceFromTeacher(
   } catch (err: any) {
     console.error("[ZeePrep] Error requesting study resource:", err);
     return { success: false, error: err?.message || "Failed to notify teacher" };
+  }
+}
+
+export interface TeacherResourceNotification {
+  id: string;
+  title: string;
+  message: string;
+  type: string;
+  recipientId?: string;
+  recipientRole?: string;
+  studentId: string;
+  studentName: string;
+  studentEmail: string;
+  grade: string;
+  section: string;
+  subject: string;
+  topic: string;
+  examTitle?: string;
+  reportId?: string;
+  read: boolean;
+  createdAt: string;
+}
+
+export async function getTeacherNotifications(
+  teacherSubject?: string,
+  teacherGrade?: string
+): Promise<TeacherResourceNotification[]> {
+  try {
+    const notifsRef = collection(db, "notifications");
+    const q = query(notifsRef, orderBy("createdAt", "desc"), limit(50));
+    const snap = await getDocs(q);
+    const results: TeacherResourceNotification[] = [];
+    snap.forEach((docSnap) => {
+      const data = docSnap.data() as any;
+      if (data.recipientRole === "teacher" || !data.recipientRole) {
+        if (teacherSubject && data.subject && data.subject !== "General") {
+          const s1 = String(teacherSubject).toLowerCase().trim();
+          const s2 = String(data.subject).toLowerCase().trim();
+          if (!s1.includes(s2) && !s2.includes(s1)) {
+            return;
+          }
+        }
+        results.push({ id: docSnap.id, ...data });
+      }
+    });
+    return results;
+  } catch (err: any) {
+    console.error("[ZeePrep] Error fetching teacher notifications:", err);
+    return [];
+  }
+}
+
+export function subscribeToTeacherNotifications(
+  callback: (notifications: TeacherResourceNotification[]) => void,
+  teacherSubject?: string,
+  teacherGrade?: string
+): () => void {
+  try {
+    const notifsRef = collection(db, "notifications");
+    const q = query(notifsRef, orderBy("createdAt", "desc"), limit(50));
+    const unsubscribe = onSnapshot(
+      q,
+      (snap) => {
+        const results: TeacherResourceNotification[] = [];
+        snap.forEach((docSnap) => {
+          const data = docSnap.data() as any;
+          if (data.recipientRole === "teacher" || !data.recipientRole) {
+            if (teacherSubject && data.subject && data.subject !== "General") {
+              const s1 = String(teacherSubject).toLowerCase().trim();
+              const s2 = String(data.subject).toLowerCase().trim();
+              if (!s1.includes(s2) && !s2.includes(s1)) {
+                return;
+              }
+            }
+            results.push({ id: docSnap.id, ...data });
+          }
+        });
+        callback(results);
+      },
+      (err) => {
+        console.error("[ZeePrep] Error in notifications subscription:", err);
+        callback([]);
+      }
+    );
+    return unsubscribe;
+  } catch (err) {
+    console.error("[ZeePrep] Failed to setup notifications listener:", err);
+    return () => {};
+  }
+}
+
+export async function markNotificationAsRead(notificationId: string): Promise<boolean> {
+  try {
+    const notifRef = doc(db, "notifications", notificationId);
+    await updateDoc(notifRef, { read: true });
+    return true;
+  } catch (err) {
+    console.error("[ZeePrep] Failed to mark notification read:", err);
+    return false;
+  }
+}
+
+export async function deleteNotification(notificationId: string): Promise<boolean> {
+  try {
+    const notifRef = doc(db, "notifications", notificationId);
+    await deleteDoc(notifRef);
+    return true;
+  } catch (err) {
+    console.error("[ZeePrep] Failed to delete notification:", err);
+    return false;
   }
 }
 
@@ -2327,6 +2501,28 @@ export interface StudentHomeResourceRecommendation {
   isWeakTopicMatch: boolean;
 }
 
+export interface MultiLevelExamSeries {
+  seriesId: string;
+  title: string;
+  subject: string;
+  grade: string;
+  totalLevels: number;
+  unlockedLevel: number;
+  levels: {
+    examId: string;
+    levelNumber: number;
+    levelKey: string;
+    levelTitle: string;
+    durationMinutes: number;
+    questionCount: number;
+    isCompleted: boolean;
+    isLocked: boolean;
+    prerequisiteTitle?: string;
+    lastScorePercentage?: number;
+    lastReportId?: string;
+  }[];
+}
+
 export interface StudentHomeDashboardData {
   student: User;
   overallPerformance: number;
@@ -2341,6 +2537,7 @@ export interface StudentHomeDashboardData {
   };
   totalCompletedReports: number;
   activeExamsCount: number;
+  multiLevelExamSeries?: MultiLevelExamSeries[];
   weakTopics: StudentHomeWeakTopic[];
   recommendedResources: StudentHomeResourceRecommendation[];
   recentAssessments: {
@@ -2374,6 +2571,76 @@ export interface StudentHomeDashboardData {
   };
 }
 
+function buildMultiLevelSeriesList(activeExams: Exam[], reports: Report[]): MultiLevelExamSeries[] {
+  const seriesMap = new Map<string, Exam[]>();
+  activeExams.forEach((ex) => {
+    const sId = ex.seriesId || (ex.levelNumber ? `${ex.subject}_${ex.grade}_series` : "");
+    if (sId) {
+      const list = seriesMap.get(sId) || [];
+      list.push(ex);
+      seriesMap.set(sId, list);
+    }
+  });
+
+  const seriesList: MultiLevelExamSeries[] = [];
+
+  seriesMap.forEach((examsInSeries, seriesId) => {
+    examsInSeries.sort((a, b) => (a.levelNumber || 1) - (b.levelNumber || 1));
+    let unlockedMaxLevel = 1;
+
+    const levels = examsInSeries.map((ex, idx) => {
+      const lvlNum = ex.levelNumber || (idx + 1);
+      const rep = reports.find((r) => r.examId === ex.id);
+      const isCompleted = !!rep;
+      
+      let isLocked = false;
+      let prerequisiteTitle: string | undefined;
+
+      if (lvlNum > 1) {
+        const prevExam = examsInSeries.find((p) => (p.levelNumber || 0) === lvlNum - 1) || examsInSeries[idx - 1];
+        const prevCompleted = prevExam && reports.some((r) => r.examId === prevExam.id);
+        if (!prevCompleted) {
+          isLocked = true;
+          prerequisiteTitle = prevExam?.title || `Level ${lvlNum - 1}`;
+        }
+      }
+
+      if (!isLocked) {
+        unlockedMaxLevel = Math.max(unlockedMaxLevel, lvlNum);
+      }
+
+      const qCount = ex.questionIds ? ex.questionIds.length : (ex.questions ? ex.questions.length : 25);
+
+      return {
+        examId: ex.id,
+        levelNumber: lvlNum,
+        levelKey: ex.level || `level${lvlNum}`,
+        levelTitle: ex.title,
+        durationMinutes: ex.durationMinutes || 60,
+        questionCount: qCount,
+        isCompleted,
+        isLocked,
+        prerequisiteTitle,
+        lastScorePercentage: rep ? Number(rep.percentage) : undefined,
+        lastReportId: rep?.id,
+      };
+    });
+
+    const firstExam = examsInSeries[0];
+    seriesList.push({
+      seriesId,
+      title: `${firstExam.subject} — Progressive 3-Level Assessment`,
+      subject: firstExam.subject,
+      grade: firstExam.grade,
+      totalLevels: levels.length,
+      unlockedLevel: unlockedMaxLevel,
+      levels,
+    });
+  });
+
+  return seriesList;
+}
+
 export async function getStudentHomeDashboardData(user: User): Promise<StudentHomeDashboardData> {
   const defaultEmpty: StudentHomeDashboardData = {
     student: user,
@@ -2381,6 +2648,7 @@ export async function getStudentHomeDashboardData(user: User): Promise<StudentHo
     recentTrend: "neutral",
     totalCompletedReports: 0,
     activeExamsCount: 0,
+    multiLevelExamSeries: [],
     weakTopics: [],
     recommendedResources: [],
     recentAssessments: [],
@@ -2407,18 +2675,20 @@ export async function getStudentHomeDashboardData(user: User): Promise<StudentHo
     ]);
 
     const activeExams = exams.filter((e) => e.status === "published" || e.status === "active");
+    const multiLevelExamSeries = buildMultiLevelSeriesList(activeExams, reports);
 
     if (reports.length === 0) {
       return {
         ...defaultEmpty,
         activeExamsCount: activeExams.length,
+        multiLevelExamSeries,
         nextStep: {
-          title: "Start Your First Assessment",
+          title: "Start Level 1 Assessment",
           description: activeExams.length > 0
-            ? `You have ${activeExams.length} active exam${activeExams.length > 1 ? "s" : ""} assigned for Grade ${user.grade || "10"}. Start one today!`
+            ? `Class ${user.grade || "11"} Mathematics 3-Level Series is ready. Start Level 1 to unlock progressive mastery!`
             : "Complete a diagnostic assessment to build your preparation profile.",
           actionType: "exam",
-          actionLabel: "Take Assessment",
+          actionLabel: "Take Level 1 Assessment",
         },
       };
     }
@@ -2475,7 +2745,13 @@ export async function getStudentHomeDashboardData(user: User): Promise<StudentHo
       // From detailed question analysis
       if (Array.isArray(rep.detailedAnalysis)) {
         rep.detailedAnalysis.forEach((qa: any) => {
-          const tName = (qa.topic || qa.chapter || "General Concept").trim();
+          const tName = resolveActualTopic(
+            qa.topic,
+            qa.chapter,
+            rep.subject,
+            qa.questionText,
+            rep.examTitle
+          );
           if (!tName) return;
           const key = `${rep.subject || "General"}_${tName}`.toLowerCase();
           const existing = topicStatsMap.get(key) || {
@@ -2495,8 +2771,15 @@ export async function getStudentHomeDashboardData(user: User): Promise<StudentHo
       // Also parse weakTopicInsights if available
       if (Array.isArray((rep as any).weakTopicInsights)) {
         (rep as any).weakTopicInsights.forEach((wt: any) => {
-          const tName = (wt.topic || "").trim();
-          if (!tName) return;
+          const rawName = (wt.topic || "").trim();
+          if (!rawName) return;
+          const tName = resolveActualTopic(
+            rawName,
+            null,
+            rep.subject,
+            null,
+            rep.examTitle
+          );
           const key = `${rep.subject || "General"}_${tName}`.toLowerCase();
           const existing = topicStatsMap.get(key) || {
             topic: tName,
@@ -2526,16 +2809,22 @@ export async function getStudentHomeDashboardData(user: User): Promise<StudentHo
           );
         });
 
+        const isTopicSameAsSubject = val.topic.trim().toLowerCase() === val.subject.trim().toLowerCase();
+        const displayTopic = isTopicSameAsSubject ? "Core & Foundational Concepts" : val.topic;
+        const displaySuggestion = match
+          ? `Recommended study material available for ${displayTopic}.`
+          : isTopicSameAsSubject
+          ? `Review foundational ${val.subject} principles before your next assessment.`
+          : `Review ${displayTopic} concepts before your next ${val.subject} assessment.`;
+
         weakTopicsList.push({
-          topic: val.topic,
+          topic: displayTopic,
           subject: val.subject,
           accuracy: acc,
           totalQuestions: val.totalQuestions,
           wrongCount: val.wrongCount,
           recommendedResource: match,
-          suggestionText: match
-            ? `Recommended study material available for ${val.topic}.`
-            : `Review ${val.topic} concepts before your next ${val.subject} assessment.`,
+          suggestionText: displaySuggestion,
         });
       }
     });
@@ -2552,7 +2841,7 @@ export async function getStudentHomeDashboardData(user: User): Promise<StudentHo
       if (wt.recommendedResource && !usedResIds.has(wt.recommendedResource.id)) {
         recommendedResources.push({
           resource: wt.recommendedResource,
-          reason: `Recommended for weak topic: ${wt.topic}`,
+          reason: `Targeted revision for weak topic: ${wt.topic}`,
           isWeakTopicMatch: true,
         });
         usedResIds.add(wt.recommendedResource.id);
@@ -2562,9 +2851,11 @@ export async function getStudentHomeDashboardData(user: User): Promise<StudentHo
     // Priority 2: General grade & subject revision materials
     resources.forEach((res) => {
       if (recommendedResources.length < 4 && !usedResIds.has(res.id)) {
+        const gradeText = res.grade || user.grade || "10";
+        const subjectText = res.subject && res.subject !== "undefined" ? ` • ${res.subject}` : "";
         recommendedResources.push({
           resource: res,
-          reason: `Curriculum revision for Grade ${res.grade || user.grade || "10"} ${res.subject}`,
+          reason: `Curriculum revision for Grade ${gradeText}${subjectText}`,
           isWeakTopicMatch: false,
         });
         usedResIds.add(res.id);
@@ -2673,6 +2964,7 @@ export async function getStudentHomeDashboardData(user: User): Promise<StudentHo
       latestAssessment,
       totalCompletedReports: reports.length,
       activeExamsCount: activeExams.length,
+      multiLevelExamSeries,
       weakTopics: weakTopicsList.slice(0, 5),
       recommendedResources: recommendedResources.slice(0, 4),
       recentAssessments,

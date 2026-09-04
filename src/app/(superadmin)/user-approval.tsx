@@ -11,13 +11,15 @@ import {
   Modal,
   TextInput,
 } from "react-native";
+import { useRouter } from "expo-router";
+import { useAuthStore } from "../../stores/auth-store";
+import { showZeeAlert } from "../../stores/alert-store";
 import {
   getPendingTeacherApprovals,
   updateUserAccountStatus,
   getAllUsers,
   deleteUserAccountPermanently,
 } from "../../services/firestore";
-import { useAuthStore } from "../../stores/auth-store";
 import type { User } from "../../types";
 import { ZEEPREP_THEME } from "../../constants/theme";
 import {
@@ -120,9 +122,9 @@ export default function UserApprovalScreen() {
       if (ok) {
         setPendingTeachers((prev) => prev.filter((t) => t.uid !== teacher.uid));
         setAllTeachers((prev) => [{ ...teacher, status: "active", approvalStatus: "approved" }, ...prev]);
-        Alert.alert("Teacher Approved", `${teacher.name || teacher.email} has been granted faculty portal access.`);
+        showZeeAlert("Teacher Approved", `${teacher.name || teacher.email} has been granted faculty portal access.`, [{ text: "OK" }], "success");
       } else {
-        Alert.alert("Error", "Failed to approve faculty account.");
+        showZeeAlert("Error", "Failed to approve faculty account.", [{ text: "OK" }], "error");
       }
     } catch (err) {
       console.error("Error approving teacher:", err);
@@ -134,9 +136,9 @@ export default function UserApprovalScreen() {
       const ok = await updateUserAccountStatus(teacher.uid, "rejected", "rejected", currentUser || undefined);
       if (ok) {
         setPendingTeachers((prev) => prev.filter((t) => t.uid !== teacher.uid));
-        Alert.alert("Teacher Rejected", `${teacher.name || teacher.email} access request has been rejected.`);
+        showZeeAlert("Teacher Rejected", `${teacher.name || teacher.email} access request has been rejected.`, [{ text: "OK" }], "info");
       } else {
-        Alert.alert("Error", "Failed to reject faculty account.");
+        showZeeAlert("Error", "Failed to reject faculty account.", [{ text: "OK" }], "error");
       }
     } catch (err) {
       console.error("Error rejecting teacher:", err);
@@ -144,7 +146,7 @@ export default function UserApprovalScreen() {
   };
 
   const handleDeleteUser = async (target: User) => {
-    Alert.alert(
+    showZeeAlert(
       "Confirm Account Deletion",
       `Are you sure you want to permanently delete ${target.name || target.email}? This action cannot be undone.`,
       [
@@ -157,11 +159,12 @@ export default function UserApprovalScreen() {
             if (ok) {
               setAllTeachers((prev) => prev.filter((u) => u.uid !== target.uid));
               setAllUsers((prev) => prev.filter((u) => u.uid !== target.uid));
-              Alert.alert("User Deleted", "Account permanently removed from Firebase.");
+              showZeeAlert("User Deleted", "Account permanently removed from Firebase.", [{ text: "OK" }], "success");
             }
           },
         },
-      ]
+      ],
+      "warning"
     );
   };
 
@@ -172,7 +175,7 @@ export default function UserApprovalScreen() {
       setInvitations((prev) => prev.filter((inv) => inv.id !== targetInvitation.id));
       setTargetInvitation(null);
       setConfirmInput("");
-      Alert.alert("Invitation Purged", `Invitation for ${targetInvitation.name} has been permanently deleted.`);
+      showZeeAlert("Invitation Purged", `Invitation for ${targetInvitation.name} has been permanently deleted.`, [{ text: "OK" }], "success");
     } catch (err) {
       console.error("Error deleting invitation:", err);
     } finally {
@@ -328,7 +331,7 @@ export default function UserApprovalScreen() {
                   <TouchableOpacity
                     style={styles.secondarySlateBtn}
                     onPress={() =>
-                      Alert.alert("Account Details", `ID: ${u.uid}\nEmail: ${u.email}\nRole: ${u.role}`)
+                      showZeeAlert("Account Details", `ID: ${u.uid}\nEmail: ${u.email}\nRole: ${u.role}`, [{ text: "OK" }], "info")
                     }
                   >
                     <FileText size={14} color="#334155" />
@@ -338,7 +341,7 @@ export default function UserApprovalScreen() {
                   <TouchableOpacity
                     style={styles.secondarySlateBtn}
                     onPress={() =>
-                      Alert.alert("Assignments", `Grade: ${u.grade || "All"}\nSubject: ${u.subject || "General"}`)
+                      showZeeAlert("Assignments", `Grade: ${u.grade || "All"}\nSubject: ${u.subject || "General"}`, [{ text: "OK" }], "info")
                     }
                   >
                     <BookOpen size={14} color="#334155" />
@@ -446,7 +449,7 @@ export default function UserApprovalScreen() {
                 <TouchableOpacity
                   style={styles.resetPasswordBtn}
                   onPress={() => {
-                    Alert.alert(
+                    showZeeAlert(
                       "Trigger Password Reset",
                       `Send password reset email to ${selectedUser.email}?`,
                       [
@@ -455,10 +458,11 @@ export default function UserApprovalScreen() {
                           text: "Send Email",
                           onPress: () => {
                             setSelectedUser(null);
-                            Alert.alert("Reset Sent", `Password reset instructions sent to ${selectedUser.email}`);
+                            showZeeAlert("Reset Sent", `Password reset instructions sent to ${selectedUser.email}`, [{ text: "OK" }], "success");
                           },
                         },
-                      ]
+                      ],
+                      "warning"
                     );
                   }}
                 >

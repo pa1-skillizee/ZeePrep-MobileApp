@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useMemo } from "react";
 import {
   StyleSheet,
   View,
@@ -13,6 +13,8 @@ import {
 import { useRouter, useFocusEffect } from "expo-router";
 import { useAuthStore } from "../../stores/auth-store";
 import { getStudentReportsList, getGlobalReportStatus } from "../../services/firestore";
+import { buildGlobalStudentReport } from "../../services/global-report-engine";
+import GlobalReportCard from "../../components/GlobalReportCard";
 import type { Report } from "../../types";
 import { ZEEPREP_THEME } from "../../constants/theme";
 import {
@@ -25,7 +27,7 @@ import {
   XCircle,
   FileCheck,
   Lock,
-  Sparkles,
+  LineChart,
   AlertCircle,
   RefreshCw,
 } from "lucide-react-native";
@@ -93,6 +95,11 @@ export default function StudentReportsScreen() {
 
   const passedCount = reports.filter((r) => r.passed).length;
 
+  const globalReport = useMemo(
+    () => (user ? buildGlobalStudentReport(reports, user.uid, user.grade) : null),
+    [reports, user?.uid, user?.grade]
+  );
+
   return (
     <ScrollView
       style={styles.container}
@@ -142,7 +149,7 @@ export default function StudentReportsScreen() {
       <View style={[styles.globalReportBanner, globalStatus.isUnlocked ? styles.globalUnlocked : styles.globalLocked]}>
         <View style={styles.globalHeaderRow}>
           {globalStatus.isUnlocked ? (
-            <Sparkles size={20} color="#4F46E5" />
+            <LineChart size={20} color="#4F46E5" />
           ) : (
             <Lock size={20} color="#D97706" />
           )}
@@ -165,6 +172,9 @@ export default function StudentReportsScreen() {
           />
         </View>
       </View>
+
+      {/* Global Preparation Report — composed from per-subject forecasts */}
+      <GlobalReportCard report={globalReport} isDesktopWeb={isDesktopWeb} width={width} />
 
       {/* Reports List */}
       <Text style={styles.sectionTitle}>Examination Reports</Text>

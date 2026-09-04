@@ -23,6 +23,8 @@ secrets*.json
 
 # Native Android/iOS build artifacts
 *.apk
+*.bundle
+android/app/src/main/assets/index.android.bundle
 android/build/
 android/app/build/
 android/.gradle/

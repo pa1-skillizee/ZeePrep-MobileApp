@@ -9,9 +9,9 @@ import {
   ActivityIndicator,
   RefreshControl,
   Modal,
-  Alert,
 } from "react-native";
 import { useAuthStore } from "../../stores/auth-store";
+import { showZeeAlert } from "../../stores/alert-store";
 import { getQuestionBank, addQuestionToBank } from "../../services/firestore";
 import { suggestQuestionItems, type AIGeneratedQuestionSuggestion } from "../../services/ai";
 import type { Question, QuestionLevel } from "../../types";
@@ -25,7 +25,8 @@ import {
   Bookmark,
   X,
   Upload,
-  Sparkles,
+  BrainCircuit,
+  Cpu,
   PlusCircle,
   History,
 } from "lucide-react-native";
@@ -33,6 +34,11 @@ import {
 import { AppHeader } from "../../components/AppHeader";
 import { normalizeQuestion } from "../../utils/question-normalizer";
 import { QuestionSheetUploadModal } from "../../components/QuestionSheetUploadModal";
+import {
+  getSubjectsForGrade,
+  getExamTypesForGrade,
+  ALL_GRADES,
+} from "../../constants/academic-subjects";
 
 export default function TeacherQuestionBankScreen() {
   const user = useAuthStore((state) => state.user);
@@ -57,6 +63,7 @@ export default function TeacherQuestionBankScreen() {
   // AI Modal State
   const [aiModalVisible, setAiModalVisible] = useState(false);
   const [aiTopic, setAiTopic] = useState("");
+  const [aiExamType, setAiExamType] = useState("class_test");
   const [generating, setGenerating] = useState(false);
 
   const fetchQuestions = async () => {
@@ -83,14 +90,14 @@ export default function TeacherQuestionBankScreen() {
 
   const handleSaveQuestion = async () => {
     if (!qText.trim() || !optA.trim() || !optB.trim()) {
-      Alert.alert("Missing Fields", "Please enter the question text and options.");
+      showZeeAlert("Missing Fields", "Please enter the question text and options.", [{ text: "OK" }], "warning");
       return;
     }
 
     // Requirement 7: Explicit Marks Validation
     const parsedMarks = parseFloat(qMarks.trim());
     if (isNaN(parsedMarks) || parsedMarks <= 0) {
-      Alert.alert("Invalid Marks", "Question marks must be a positive number greater than 0.");
+      showZeeAlert("Invalid Marks", "Question marks must be a positive number greater than 0.", [{ text: "OK" }], "warning");
       return;
     }
 
@@ -118,17 +125,19 @@ export default function TeacherQuestionBankScreen() {
         setOptB("");
         setOptC("");
         setOptD("");
-        Alert.alert("Saved", `New question (+${parsedMarks} Marks) added to institutional bank.`);
+        showZeeAlert("Saved", `New question (+${parsedMarks} Marks) added to institutional bank.`, [{ text: "OK" }], "success");
       }
     } catch (err) {
       console.error("Error saving question:", err);
+      showZeeAlert("Error", "Could not save question to bank.", [{ text: "OK" }], "error");
     } finally {
       setSaving(false);
     }
   };
 
   // AI Preview & Selection Review Modal State
-  const [aiSubject, setAiSubject] = useState(user?.subject || "Physics");
+  const [aiGrade, setAiGrade] = useState(user?.grade || "11");
+  const [aiSubject, setAiSubject] = useState(user?.subject || "Mathematics");
   const [aiCount, setAiCount] = useState<string>("10");
   const [aiLevel, setAiLevel] = useState<"level1" | "level2" | "level3">("level2");
   const [aiPreviewItems, setAiPreviewItems] = useState<(AIGeneratedQuestionSuggestion & { selected: boolean })[]>([]);
@@ -137,7 +146,7 @@ export default function TeacherQuestionBankScreen() {
 
   const handleAiSuggest = async () => {
     if (!aiTopic.trim()) {
-      Alert.alert("Topic Required", "Please enter a subject topic for AI question generation.");
+      showZeeAlert("Topic Required", "Please enter a subject topic for AI question generation.", [{ text: "OK" }], "warning");
       return;
     }
 
@@ -146,8 +155,8 @@ export default function TeacherQuestionBankScreen() {
     setGenerating(true);
     try {
       const items = await suggestQuestionItems(
-        aiSubject.trim() || user?.subject || "Science",
-        user?.grade || "10",
+        aiSubject.trim() || user?.subject || "Mathematics",
+        aiGrade || user?.grade || "11",
         aiTopic.trim(),
         requestedCount,
         aiLevel
@@ -157,11 +166,11 @@ export default function TeacherQuestionBankScreen() {
         setAiModalVisible(false);
         setAiReviewModalVisible(true);
       } else {
-        Alert.alert("Notice", "AI Engine returned no items. Please try again.");
+        showZeeAlert("Notice", "AI Engine returned no items. Please try again.", [{ text: "OK" }], "info");
       }
     } catch (err) {
       console.error("AI question generation error:", err);
-      Alert.alert("Error", "Failed to generate AI questions.");
+      showZeeAlert("Error", "Failed to generate AI questions.", [{ text: "OK" }], "error");
     } finally {
       setGenerating(false);
     }
@@ -170,7 +179,7 @@ export default function TeacherQuestionBankScreen() {
   const handleSaveSelectedAiQuestions = async () => {
     const selectedItems = aiPreviewItems.filter((i) => i.selected);
     if (selectedItems.length === 0) {
-      Alert.alert("No Items Selected", "Please select at least one question to save to your bank.");
+      showZeeAlert("No Items Selected", "Please select at least one question to save to your bank.", [{ text: "OK" }], "warning");
       return;
     }
 
@@ -194,10 +203,10 @@ export default function TeacherQuestionBankScreen() {
       setAiReviewModalVisible(false);
       setAiPreviewItems([]);
       setAiTopic("");
-      Alert.alert("Saved", `${selectedItems.length} selected AI question(s) added to institutional bank.`);
+      showZeeAlert("Saved", `${selectedItems.length} selected AI question(s) added to institutional bank.`, [{ text: "OK" }], "success");
     } catch (err) {
       console.error("Error saving selected questions:", err);
-      Alert.alert("Error", "Failed to save selected questions.");
+      showZeeAlert("Error", "Failed to save selected questions.", [{ text: "OK" }], "error");
     } finally {
       setSavingSelected(false);
     }
@@ -247,7 +256,7 @@ export default function TeacherQuestionBankScreen() {
             }}
             activeOpacity={0.85}
           >
-            <Sparkles size={15} color={activeNavTab === "ai" ? "#FFFFFF" : "#334155"} />
+            <BrainCircuit size={16} color={activeNavTab === "ai" ? "#FFFFFF" : "#334155"} />
             <Text style={[styles.gridTabText, activeNavTab === "ai" && styles.gridTabTextActive]} numberOfLines={1}>
               AI Generator
             </Text>
@@ -408,7 +417,7 @@ export default function TeacherQuestionBankScreen() {
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                <Sparkles color="#4F46E5" size={20} />
+                <BrainCircuit color="#4F46E5" size={20} />
                 <Text style={styles.modalTitle}>AI Teacher Copilot Generator</Text>
               </View>
               <TouchableOpacity onPress={() => setAiModalVisible(false)}>
@@ -417,19 +426,103 @@ export default function TeacherQuestionBankScreen() {
             </View>
 
             <ScrollView showsVerticalScrollIndicator={false}>
-              <Text style={styles.inputLabel}>Subject</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="e.g. Physics / Chemistry / Mathematics"
-                placeholderTextColor="#94A3B8"
-                value={aiSubject}
-                onChangeText={setAiSubject}
-              />
+              {/* Class / Grade Selector */}
+              <Text style={styles.inputLabel}>Class / Grade</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}>
+                <View style={{ flexDirection: "row", gap: 6 }}>
+                  {ALL_GRADES.map((g) => (
+                    <TouchableOpacity
+                      key={g}
+                      style={[
+                        styles.filterChip,
+                        aiGrade === g && styles.filterChipActive,
+                        { paddingHorizontal: 12 },
+                      ]}
+                      onPress={() => {
+                        setAiGrade(g);
+                        const subs = getSubjectsForGrade(g);
+                        if (subs.length > 0 && !subs.includes(aiSubject)) {
+                          setAiSubject(subs[0]);
+                        }
+                      }}
+                    >
+                      <Text style={[styles.filterText, aiGrade === g && styles.filterTextActive]}>
+                        Class {g}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </ScrollView>
 
-              <Text style={styles.inputLabel}>Topic / Concept Name</Text>
+              {/* Subject Selector for Selected Class */}
+              <Text style={styles.inputLabel}>Subject for Class {aiGrade}</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}>
+                <View style={{ flexDirection: "row", gap: 6 }}>
+                  {getSubjectsForGrade(aiGrade).map((sub) => (
+                    <TouchableOpacity
+                      key={sub}
+                      style={[
+                        styles.filterChip,
+                        aiSubject.trim().toLowerCase() === sub.trim().toLowerCase() && styles.filterChipActive,
+                        { paddingHorizontal: 12 },
+                      ]}
+                      onPress={() => setAiSubject(sub)}
+                    >
+                      <Text
+                        style={[
+                          styles.filterText,
+                          aiSubject.trim().toLowerCase() === sub.trim().toLowerCase() && styles.filterTextActive,
+                        ]}
+                      >
+                        {sub}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </ScrollView>
+
+              {/* Requirement: Exam Purpose / Type Selector (Smartly filtered for Class) */}
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                <Text style={styles.inputLabel}>Exam Type / Purpose</Text>
+                {["8", "10", "12"].includes(aiGrade.replace(/\D/g, "")) && (
+                  <View style={{ backgroundColor: "#FEF3C7", paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
+                    <Text style={{ fontSize: 10, fontWeight: "700", color: "#B45309" }}>
+                      Class {aiGrade} Board Options
+                    </Text>
+                  </View>
+                )}
+              </View>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}>
+                <View style={{ flexDirection: "row", gap: 6 }}>
+                  {getExamTypesForGrade(aiGrade).map((t) => (
+                    <TouchableOpacity
+                      key={t.id}
+                      style={[
+                        styles.filterChip,
+                        aiExamType === t.id && styles.filterChipActive,
+                        t.category === "board" && { borderColor: "#F59E0B" },
+                        t.category === "board" && aiExamType === t.id && { backgroundColor: "#D97706" },
+                        { paddingHorizontal: 12 },
+                      ]}
+                      onPress={() => setAiExamType(t.id)}
+                    >
+                      <Text
+                        style={[
+                          styles.filterText,
+                          aiExamType === t.id && styles.filterTextActive,
+                        ]}
+                      >
+                        {t.label}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </ScrollView>
+
+              <Text style={styles.inputLabel}>Topic / Chapter Name</Text>
               <TextInput
                 style={styles.input}
-                placeholder="e.g. Thermodynamics / Electric Circuits"
+                placeholder="e.g. Trigonometric Functions / Relations / Thermodynamics"
                 placeholderTextColor="#94A3B8"
                 value={aiTopic}
                 onChangeText={setAiTopic}
@@ -523,7 +616,7 @@ export default function TeacherQuestionBankScreen() {
           <View style={[styles.modalContent, { maxHeight: "85%" }]}>
             <View style={styles.modalHeader}>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                <Sparkles color="#4F46E5" size={20} />
+                <BrainCircuit color="#4F46E5" size={20} />
                 <Text style={styles.modalTitle}>Review AI Generated Items</Text>
               </View>
               <TouchableOpacity onPress={() => setAiReviewModalVisible(false)}>

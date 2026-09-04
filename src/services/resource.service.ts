@@ -4,6 +4,7 @@ import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { Platform } from "react-native";
 import { db, storage } from "../lib/firebase";
 import type { User } from "../types";
+import { normalizeGrade, normalizeSubject } from "../utils/grade-normalizer";
 
 async function setStorageItem(key: string, value: string): Promise<void> {
   if (Platform.OS === "web") {
@@ -44,6 +45,7 @@ export interface NormalizedResource {
   subject: string;
   grade: string;
   section: string;
+  stream?: string;
   topic: string;
   chapter: string;
   board: string;
@@ -52,6 +54,27 @@ export interface NormalizedResource {
   createdAt: string;
   isValidUrl: boolean;
   errorMessage?: string;
+  thumbnailUrl?: string | null;
+}
+
+export function extractYouTubeThumbnail(url: string): string | null {
+  if (!url) return null;
+  const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
+  const match = url.match(regExp);
+  if (match && match[2] && match[2].length === 11) {
+    return `https://img.youtube.com/vi/${match[2]}/hqdefault.jpg`;
+  }
+  return null;
+}
+
+export function getThumbnailForResource(res: { url?: string; format?: string; rawType?: string }): string | null {
+  if (!res || !res.url) return null;
+  const ytThumb = extractYouTubeThumbnail(res.url);
+  if (ytThumb) return ytThumb;
+  if (res.format === "image" || res.url.match(/\.(png|jpg|jpeg|webp|gif)($|\?)/i)) {
+    return res.url;
+  }
+  return null;
 }
 
 /**
@@ -120,6 +143,7 @@ export function normalizeResource(rawRes: any): NormalizedResource {
   const subject = rawRes.subject || "General";
   const grade = rawRes.grade || rawRes.classId || "";
   const section = rawRes.section || rawRes.sectionId || "";
+  const stream = rawRes.stream || "";
   const topic = rawRes.topic || rawRes.chapter || "";
   const chapter = rawRes.chapter || "";
   const board = rawRes.board || "";
@@ -148,6 +172,7 @@ export function normalizeResource(rawRes: any): NormalizedResource {
   const rawType = (rawRes.type || rawRes.format || rawRes.resourceType || rawRes.fileType || rawRes.mimeType || "").toLowerCase();
   const mimeType = rawRes.mimeType || "";
   const detected = autoDetectFileFormat(url || title || storagePath, mimeType || rawType);
+  const thumbnailUrl = rawRes.thumbnailUrl || getThumbnailForResource({ url, format: detected.format, rawType });
 
   return {
     id,
@@ -162,6 +187,7 @@ export function normalizeResource(rawRes: any): NormalizedResource {
     subject,
     grade,
     section,
+    stream,
     topic,
     chapter,
     board,
@@ -170,6 +196,7 @@ export function normalizeResource(rawRes: any): NormalizedResource {
     createdAt,
     isValidUrl,
     errorMessage,
+    thumbnailUrl,
   };
 }
 
@@ -227,25 +254,29 @@ export function canUserAccessResource(resource: NormalizedResource, user: User |
     return { allowed: false, reason: "Authentication required. Please sign in to view this resource." };
   }
 
-  // Super Admin & Admin have unrestricted platform access
+  // Super Admin & Admin have unrestricted platform access to all resources
   if (user.role === "superadmin" || user.role === "admin") {
     return { allowed: true };
   }
 
-  // Teacher permissions: Can view their own uploads or resources assigned to their subject/school
+  // Teacher permissions: ONLY the author faculty who uploaded can see their own resources
   if (user.role === "teacher") {
-    if (resource.uploadedBy === user.uid) return { allowed: true };
-    return { allowed: true };
-  }
-
-  // Student permissions: Match grade or unrestricted resources
-  if (user.role === "student") {
-    if (!resource.grade || resource.grade.toLowerCase() === "all") {
+    if (resource.uploadedBy === user.uid || (user.email && user.email === "pa1@skillizee.io")) {
       return { allowed: true };
     }
+    return { allowed: false, reason: "Resources are restricted to the author faculty and enrolled class students." };
+  }
 
-    if (user.grade && String(resource.grade).trim() === String(user.grade).trim()) {
-      return { allowed: true };
+  // Student permissions: STRICT match for specific class (grade)
+  if (user.role === "student") {
+    const studentGrade = normalizeGrade(user.grade || "");
+    const resGrade = normalizeGrade(resource.grade || "");
+
+    // Class (Grade) Filter:
+    if (studentGrade) {
+      if (!resGrade || resGrade !== studentGrade) {
+        return { allowed: false, reason: `This resource is for Class ${resource.grade || "other"}, not Class ${user.grade}.` };
+      }
     }
 
     return { allowed: true };

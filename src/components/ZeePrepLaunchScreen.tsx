@@ -9,8 +9,20 @@ import {
   Platform,
 } from "react-native";
 import { createAudioPlayer } from "expo-audio";
+import * as SecureStore from "expo-secure-store";
+import Svg, {
+  Defs,
+  LinearGradient,
+  Stop,
+  Path,
+  Rect,
+  Circle,
+  Polygon,
+} from "react-native-svg";
 
 const { width } = Dimensions.get("window");
+const LAST_LAUNCH_KEY = "zeeprep_last_launch_anim_time";
+const MIN_INTERVAL_MS = 8 * 60 * 60 * 1000; // 8 hours minimum between splash animations
 
 // In-memory cold launch state (resets only on process exit)
 let hasPlayedColdLaunch = false;
@@ -38,12 +50,11 @@ export function ZeePrepLaunchScreen({ onComplete }: ZeePrepLaunchScreenProps) {
   const voicePlayerRef = useRef<any>(null);
 
   useEffect(() => {
-    // If Web platform or warm launch, skip immediately
+    // If Web platform or already played in this process, skip immediately
     if (Platform.OS === "web" || hasPlayedColdLaunch) {
       onComplete();
       return;
     }
-    hasPlayedColdLaunch = true;
 
     let isMounted = true;
     let fadeOutStarted = false;
@@ -52,7 +63,23 @@ export function ZeePrepLaunchScreen({ onComplete }: ZeePrepLaunchScreenProps) {
     let voiceDone = false;
     let musicDone = false;
 
-    // Helper: Safely fade out audio and trigger screen transition
+    const cleanupAudio = () => {
+      try {
+        if (musicPlayerRef.current) {
+          musicPlayerRef.current.pause();
+          musicPlayerRef.current.remove();
+          musicPlayerRef.current = null;
+        }
+        if (voicePlayerRef.current) {
+          voicePlayerRef.current.pause();
+          voicePlayerRef.current.remove();
+          voicePlayerRef.current = null;
+        }
+      } catch (e) {
+        // Ignored
+      }
+    };
+
     const finishLaunchSequence = () => {
       if (fadeOutStarted || !isMounted) return;
       fadeOutStarted = true;
@@ -71,74 +98,58 @@ export function ZeePrepLaunchScreen({ onComplete }: ZeePrepLaunchScreenProps) {
       });
     };
 
-    // Cleanup helper
-    const cleanupAudio = () => {
-      try {
-        if (musicPlayerRef.current) {
-          musicPlayerRef.current.pause();
-          musicPlayerRef.current.remove();
-          musicPlayerRef.current = null;
-        }
-        if (voicePlayerRef.current) {
-          voicePlayerRef.current.pause();
-          voicePlayerRef.current.remove();
-          voicePlayerRef.current = null;
-        }
-      } catch (e) {
-        // Ignored
-      }
-    };
+    const startLaunchSequence = () => {
+      hasPlayedColdLaunch = true;
 
-    // Step 1: Start Visual Animation
-    Animated.parallel([
-      Animated.timing(bgGlowScale, {
-        toValue: 1.25,
-        duration: 1600,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
-      }),
-      Animated.timing(bgGlowOpacity, {
-        toValue: 0.45,
-        duration: 1400,
-        useNativeDriver: true,
-      }),
-      Animated.spring(logoScale, {
-        toValue: 1.0,
-        friction: 7,
-        tension: 40,
-        useNativeDriver: true,
-      }),
-      Animated.timing(logoOpacity, {
-        toValue: 1.0,
-        duration: 800,
-        useNativeDriver: true,
-      }),
-      Animated.timing(wordmarkOpacity, {
-        toValue: 1.0,
-        duration: 900,
-        useNativeDriver: true,
-      }),
-      Animated.timing(wordmarkTranslateY, {
-        toValue: 0,
-        duration: 900,
-        easing: Easing.out(Easing.back(1.5)),
-        useNativeDriver: true,
-      }),
-      Animated.timing(taglineOpacity, {
-        toValue: 1.0,
-        duration: 1100,
-        useNativeDriver: true,
-      }),
-      Animated.timing(taglineTranslateY, {
-        toValue: 0,
-        duration: 1100,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
-      }),
-    ]).start();
+      // Step 1: Start Visual Animation
+      Animated.parallel([
+        Animated.timing(bgGlowScale, {
+          toValue: 1.25,
+          duration: 1600,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+        Animated.timing(bgGlowOpacity, {
+          toValue: 0.45,
+          duration: 1400,
+          useNativeDriver: true,
+        }),
+        Animated.spring(logoScale, {
+          toValue: 1.0,
+          friction: 7,
+          tension: 40,
+          useNativeDriver: true,
+        }),
+        Animated.timing(logoOpacity, {
+          toValue: 1.0,
+          duration: 800,
+          useNativeDriver: true,
+        }),
+        Animated.timing(wordmarkOpacity, {
+          toValue: 1.0,
+          duration: 900,
+          useNativeDriver: true,
+        }),
+        Animated.timing(wordmarkTranslateY, {
+          toValue: 0,
+          duration: 900,
+          easing: Easing.out(Easing.back(1.5)),
+          useNativeDriver: true,
+        }),
+        Animated.timing(taglineOpacity, {
+          toValue: 1.0,
+          duration: 1100,
+          useNativeDriver: true,
+        }),
+        Animated.timing(taglineTranslateY, {
+          toValue: 0,
+          duration: 1100,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+      ]).start();
 
-    // Step 2: Initialize Audio & Monitor Dual Audio Completion
-    const setupAudioAndSync = async () => {
+      // Step 2: Initialize Audio & Monitor Dual Audio Completion
       try {
         const musicSource = require("../../assets/Intro Music 1.mp3");
         const voiceSource = require("../../assets/Intro.mp3");
@@ -149,7 +160,7 @@ export function ZeePrepLaunchScreen({ onComplete }: ZeePrepLaunchScreenProps) {
         musicPlayerRef.current = musicPlayer;
         voicePlayerRef.current = voicePlayer;
 
-        // 0.15s: Start Intro Voice sound ("ZeePrep — Learn. Practice. Perform.") at loud volume (1.0)
+        // 0.15s: Start Intro Voice sound
         setTimeout(() => {
           if (!isMounted) return;
           try {
@@ -161,7 +172,7 @@ export function ZeePrepLaunchScreen({ onComplete }: ZeePrepLaunchScreenProps) {
           }
         }, 150);
 
-        // 0.8s: Start Intro Music at soft background volume (0.25) to harmonize with the voiceover
+        // 0.8s: Start Intro Music
         setTimeout(() => {
           if (!isMounted) return;
           try {
@@ -173,7 +184,7 @@ export function ZeePrepLaunchScreen({ onComplete }: ZeePrepLaunchScreenProps) {
           }
         }, 800);
 
-        // Dual Audio Poller: Waits for BOTH Intro Voice AND Intro Music to complete 100% naturally
+        // Dual Audio Poller
         const pollInterval = setInterval(() => {
           if (!isMounted) {
             clearInterval(pollInterval);
@@ -181,7 +192,6 @@ export function ZeePrepLaunchScreen({ onComplete }: ZeePrepLaunchScreenProps) {
           }
 
           try {
-            // Monitor Voice Status
             if (voicePlayer && voiceHasStarted) {
               const vPlaying = Boolean(voicePlayer.playing);
               const vCur = voicePlayer.currentTime || 0;
@@ -191,7 +201,6 @@ export function ZeePrepLaunchScreen({ onComplete }: ZeePrepLaunchScreenProps) {
               }
             }
 
-            // Monitor Music Status
             if (musicPlayer && musicHasStarted) {
               const mPlaying = Boolean(musicPlayer.playing);
               const mCur = musicPlayer.currentTime || 0;
@@ -201,7 +210,6 @@ export function ZeePrepLaunchScreen({ onComplete }: ZeePrepLaunchScreenProps) {
               }
             }
 
-            // Only trigger transition once BOTH audios have finished completely
             if (voiceDone && musicDone) {
               clearInterval(pollInterval);
               setTimeout(() => {
@@ -213,7 +221,7 @@ export function ZeePrepLaunchScreen({ onComplete }: ZeePrepLaunchScreenProps) {
           }
         }, 150);
 
-        // Safety max timeout (9.5s) to guarantee app transition if device audio service locks
+        // Safety max timeout (9.5s)
         setTimeout(() => {
           if (isMounted && !fadeOutStarted) {
             finishLaunchSequence();
@@ -229,7 +237,39 @@ export function ZeePrepLaunchScreen({ onComplete }: ZeePrepLaunchScreenProps) {
       }
     };
 
-    setupAudioAndSync();
+    // Check last launch timestamp
+    const checkLaunchEligibility = async () => {
+      try {
+        let lastTsStr: string | null = null;
+        if (Platform.OS === "web") {
+          lastTsStr = localStorage.getItem(LAST_LAUNCH_KEY);
+        } else {
+          lastTsStr = await SecureStore.getItemAsync(LAST_LAUNCH_KEY);
+        }
+
+        const now = Date.now();
+        if (lastTsStr && now - Number(lastTsStr) < MIN_INTERVAL_MS) {
+          // Opened recently — skip intro animation and audio
+          hasPlayedColdLaunch = true;
+          onComplete();
+          return;
+        }
+
+        // Save current timestamp
+        if (Platform.OS === "web") {
+          localStorage.setItem(LAST_LAUNCH_KEY, String(now));
+        } else {
+          await SecureStore.setItemAsync(LAST_LAUNCH_KEY, String(now));
+        }
+      } catch (e) {
+        // Fall through to play animation if storage fails
+      }
+
+      if (!isMounted) return;
+      startLaunchSequence();
+    };
+
+    checkLaunchEligibility();
 
     return () => {
       isMounted = false;
@@ -256,47 +296,99 @@ export function ZeePrepLaunchScreen({ onComplete }: ZeePrepLaunchScreenProps) {
         {/* Logo Badge with Distinctive Z Symbol */}
         <Animated.View
           style={[
-            styles.logoBadge,
+            styles.logoWrapper,
             {
               transform: [{ scale: logoScale }],
               opacity: logoOpacity,
             },
           ]}
         >
-          <View style={styles.zCapShape}>
-            {/* Graduation Cap Top Diamond */}
-            <View style={styles.capDiamond} />
-            {/* Z Top Bar */}
-            <View style={styles.zTopBar} />
-            {/* Z Diagonal */}
-            <View style={styles.zDiagonal} />
-            {/* Z Bottom Bar */}
-            <View style={styles.zBottomBar} />
+          <Svg viewBox="0 0 512 512" style={styles.logoSvg}>
+            <Defs>
+              <LinearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <Stop offset="0%" stopColor="#4F46E5" />
+                <Stop offset="50%" stopColor="#4338CA" />
+                <Stop offset="100%" stopColor="#3730A3" />
+              </LinearGradient>
+              <LinearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <Stop offset="0%" stopColor="#FBBF24" />
+                <Stop offset="50%" stopColor="#F59E0B" />
+                <Stop offset="100%" stopColor="#D97706" />
+              </LinearGradient>
+              <LinearGradient id="accentSpark" x1="0%" y1="0%" x2="100%" y2="100%">
+                <Stop offset="0%" stopColor="#FFFFFF" />
+                <Stop offset="100%" stopColor="#E0E7FF" />
+              </LinearGradient>
+            </Defs>
+
+            {/* Background Badge Shield */}
+            <Rect x="32" y="32" width="448" height="448" rx="112" fill="url(#bgGrad)" />
+            <Rect
+              x="40"
+              y="40"
+              width="432"
+              height="432"
+              rx="104"
+              fill="none"
+              stroke="#818CF8"
+              strokeWidth="10"
+              strokeOpacity={0.4}
+            />
+
+            {/* Academic Cap Roof */}
+            <Polygon points="256,112 400,184 256,256 112,184" fill="url(#goldGrad)" />
+
+            {/* Cap Base */}
+            <Path
+              d="M168,218 L168,280 C168,320 206,344 256,344 C306,344 344,320 344,280 L344,218 L256,262 Z"
+              fill="#FFFFFF"
+              fillOpacity={0.95}
+            />
+
+            {/* Bold Zee "Z" Ribbon */}
+            <Path
+              d="M200,168 L312,168 L224,248 L312,248"
+              fill="none"
+              stroke="#1E1B4B"
+              strokeWidth="22"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+
+            {/* Golden Academic Distinction Seal */}
+            <Circle cx="392" cy="144" r="22" fill="url(#zpGold)" />
+            <Circle cx="392" cy="144" r="16" fill="none" stroke="#FFFFFF" strokeWidth="2.5" strokeOpacity={0.8} />
+            <Path d="M386 144 L390 148 L398 140" stroke="#1E1B4B" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+          </Svg>
+        </Animated.View>
+
+        {/* Wordmark: "ZeePrep" */}
+        <Animated.View
+          style={[
+            styles.wordmarkContainer,
+            {
+              opacity: wordmarkOpacity,
+              transform: [{ translateY: wordmarkTranslateY }],
+            },
+          ]}
+        >
+          <View style={styles.brandTitleRow}>
+            <Text style={styles.brandTitleZee}>Zee</Text>
+            <Text style={styles.brandTitlePrep}>Prep</Text>
           </View>
         </Animated.View>
 
-        {/* Brand Name "ZeePrep" */}
+        {/* Tagline: "SMART LMS PLATFORM" */}
         <Animated.View
-          style={{
-            opacity: wordmarkOpacity,
-            transform: [{ translateY: wordmarkTranslateY }],
-            alignItems: "center",
-          }}
+          style={[
+            styles.taglineContainer,
+            {
+              opacity: taglineOpacity,
+              transform: [{ translateY: taglineTranslateY }],
+            },
+          ]}
         >
-          <Text style={styles.brandTitle}>ZeePrep</Text>
-        </Animated.View>
-
-        {/* Tagline "Learn. Practice. Perform." */}
-        <Animated.View
-          style={{
-            opacity: taglineOpacity,
-            transform: [{ translateY: taglineTranslateY }],
-            alignItems: "center",
-            marginTop: 10,
-          }}
-        >
-          <Text style={styles.taglineText}>Learn. Practice. Perform.</Text>
-          <View style={styles.accentDivider} />
+          <Text style={styles.brandTagline}>SMART LMS PLATFORM</Text>
         </Animated.View>
       </View>
     </Animated.View>
@@ -305,107 +397,69 @@ export function ZeePrepLaunchScreen({ onComplete }: ZeePrepLaunchScreenProps) {
 
 const styles = StyleSheet.create({
   container: {
-    ...StyleSheet.absoluteFill,
-    backgroundColor: "#F8FAFC",
-    justifyContent: "center",
-    alignItems: "center",
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "#FFFFFF",
     zIndex: 99999,
+    alignItems: "center",
+    justifyContent: "center",
   },
   glowCircle: {
     position: "absolute",
-    width: width * 0.85,
-    height: width * 0.85,
-    borderRadius: (width * 0.85) / 2,
-    backgroundColor: "#DBEAFE",
-    shadowColor: "#2563EB",
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.35,
-    shadowRadius: 50,
-    elevation: 10,
+    width: width * 1.3,
+    height: width * 1.3,
+    borderRadius: (width * 1.3) / 2,
+    backgroundColor: "#EEF2FF",
+    opacity: 0.6,
   },
   brandLockupContainer: {
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 24,
   },
-  logoBadge: {
-    width: 96,
-    height: 96,
-    borderRadius: 28,
-    backgroundColor: "#2563EB",
+  logoWrapper: {
+    width: 140,
+    height: 140,
+    marginBottom: 24,
+    shadowColor: "#4F46E5",
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.25,
+    shadowRadius: 20,
+    elevation: 10,
+  },
+  logoSvg: {
+    width: "100%",
+    height: "100%",
+  },
+  wordmarkContainer: {
+    marginBottom: 8,
+  },
+  brandTitleRow: {
+    flexDirection: "row",
+    alignItems: "baseline",
     justifyContent: "center",
-    alignItems: "center",
-    marginBottom: 22,
-    borderWidth: 1.5,
-    borderColor: "#60A5FA",
-    shadowColor: "#2563EB",
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.35,
-    shadowRadius: 16,
-    elevation: 8,
   },
-  zCapShape: {
-    width: 48,
-    height: 48,
-    position: "relative",
-    justifyContent: "center",
-    alignItems: "center",
+  brandTitleZee: {
+    fontSize: 44,
+    fontWeight: "900",
+    color: "#4F46E5",
+    letterSpacing: -1,
   },
-  capDiamond: {
-    position: "absolute",
-    top: 2,
-    width: 14,
-    height: 14,
-    backgroundColor: "#FFFFFF",
-    transform: [{ rotate: "45deg" }],
-  },
-  zTopBar: {
-    position: "absolute",
-    top: 14,
-    left: 4,
-    right: 4,
-    height: 6,
-    backgroundColor: "#FFFFFF",
-    borderRadius: 3,
-  },
-  zDiagonal: {
-    position: "absolute",
-    width: 42,
-    height: 6,
-    backgroundColor: "#FFFFFF",
-    borderRadius: 3,
-    transform: [{ rotate: "-45deg" }],
-  },
-  zBottomBar: {
-    position: "absolute",
-    bottom: 6,
-    left: 4,
-    right: 4,
-    height: 6,
-    backgroundColor: "#FFFFFF",
-    borderRadius: 3,
-  },
-  brandTitle: {
-    fontSize: 42,
+  brandTitlePrep: {
+    fontSize: 44,
     fontWeight: "900",
     color: "#0F172A",
-    letterSpacing: -0.5,
-    textShadowColor: "rgba(37, 99, 235, 0.15)",
-    textShadowOffset: { width: 0, height: 4 },
-    textShadowRadius: 10,
+    letterSpacing: -1,
   },
-  taglineText: {
-    fontSize: 14,
+  taglineContainer: {
+    alignItems: "center",
+  },
+  brandTagline: {
+    fontSize: 12,
     fontWeight: "700",
-    color: "#1D4ED8",
-    letterSpacing: 2.2,
-    textTransform: "uppercase",
-  },
-  accentDivider: {
-    width: 44,
-    height: 3.5,
-    backgroundColor: "#2563EB",
-    borderRadius: 2,
-    marginTop: 12,
+    color: "#64748B",
+    letterSpacing: 4,
   },
 });

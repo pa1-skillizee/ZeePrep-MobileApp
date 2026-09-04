@@ -8,11 +8,12 @@ import {
   TextInput,
   ActivityIndicator,
   RefreshControl,
-  Alert,
   Clipboard,
   Platform,
   useWindowDimensions,
 } from "react-native";
+import { useAuthStore } from "../../stores/auth-store";
+import { showZeeAlert } from "../../stores/alert-store";
 import { getClassGrades, getAcademicSessions } from "../../services/firestore";
 import type { ClassGrade, AcademicSession } from "../../types";
 import { ZEEPREP_THEME } from "../../constants/theme";
@@ -61,7 +62,7 @@ export default function AcademicHierarchyScreen() {
 
   const handleGenerateLink = () => {
     if (!inviteEmail.trim()) {
-      Alert.alert("Required Email", "Please enter an email address for the invite link.");
+      showZeeAlert("Required Email", "Please enter an email address for the invite link.", [{ text: "OK" }], "warning");
       return;
     }
     const token = Math.random().toString(36).substring(2, 12);

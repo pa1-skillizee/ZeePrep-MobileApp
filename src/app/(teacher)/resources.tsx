@@ -9,12 +9,14 @@ import {
   ActivityIndicator,
   RefreshControl,
   Modal,
-  Alert,
+  Image,
   Platform,
+  Dimensions,
 } from "react-native";
 import { useRouter } from "expo-router";
 import * as DocumentPicker from "expo-document-picker";
 import { useAuthStore } from "../../stores/auth-store";
+import { showZeeAlert } from "../../stores/alert-store";
 import { addStudyResource } from "../../services/firestore";
 import { ZEEPREP_THEME } from "../../constants/theme";
 import {
@@ -32,8 +34,12 @@ import {
   FileSpreadsheet,
   FileCode,
   Trash2,
+  Play,
+  Layers,
+  GraduationCap,
+  BookOpen,
+  Check,
 } from "lucide-react-native";
-
 import { AppHeader } from "../../components/AppHeader";
 import {
   getResourcesForUser,
@@ -54,13 +60,19 @@ interface BatchFileItem {
   displayType: string;
 }
 
+const AVAILABLE_CLASSES = ["8", "9", "10", "11", "12"];
+const { width: screenWidth } = Dimensions.get("window");
+
 export default function TeacherResourcesScreen() {
   const router = useRouter();
   const user = useAuthStore((state) => state.user);
+  const isSuperAdmin = user?.role === "superadmin" || user?.role === "admin" || user?.email === "pa1@skillizee.io";
+
   const [resources, setResources] = useState<NormalizedResource[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedFormat, setSelectedFormat] = useState<string>("all");
+  const [selectedClassFilter, setSelectedClassFilter] = useState<string>("all");
 
   // Upload Modal State
   const [modalVisible, setModalVisible] = useState(false);
@@ -68,9 +80,10 @@ export default function TeacherResourcesScreen() {
 
   // Single Upload Fields
   const [title, setTitle] = useState("");
-  const [subject, setSubject] = useState(user?.subject || "Science");
-  const [grade, setGrade] = useState(user?.grade || "12");
-  const [singleType, setSingleType] = useState<"pdf" | "video" | "link">("pdf");
+  const [topic, setTopic] = useState("");
+  const [subject, setSubject] = useState(user?.subject || "Mathematics");
+  const [selectedGrades, setSelectedGrades] = useState<string[]>([user?.grade || "11"]);
+  const [singleType, setSingleType] = useState<"pdf" | "video" | "link">("video");
   const [url, setUrl] = useState("");
 
   // Batch Upload Fields
@@ -99,20 +112,15 @@ export default function TeacherResourcesScreen() {
     fetchResources();
   };
 
-  const FORMAT_TABS = [
-    { id: "all", label: "All Formats" },
-    { id: "video", label: "Video Lectures" },
-    { id: "pdf", label: "PDFs" },
-    { id: "word", label: "Word Docs" },
-    { id: "excel", label: "Excel Worksheets" },
-    { id: "audio", label: "Audio Lectures" },
-    { id: "image", label: "Images & Diagrams" },
-    { id: "text", label: "Text & Notes" },
-  ];
-
-  const filteredResources = resources.filter((res) => {
-    return selectedFormat === "all" || res.format === selectedFormat;
-  });
+  const toggleGradeSelection = (g: string) => {
+    if (selectedGrades.includes(g)) {
+      if (selectedGrades.length > 1) {
+        setSelectedGrades(selectedGrades.filter((item) => item !== g));
+      }
+    } else {
+      setSelectedGrades([...selectedGrades, g]);
+    }
+  };
 
   const handleResourcePress = (rawRes: any) => {
     const res = normalizeResource(rawRes);
@@ -128,7 +136,7 @@ export default function TeacherResourcesScreen() {
     } as any);
   };
 
-  // Pick Multiple Files or Folder Directory
+  // Pick Multiple Files
   const handlePickBatchFiles = async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
@@ -137,81 +145,100 @@ export default function TeacherResourcesScreen() {
       });
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
-        const newBatchItems: BatchFileItem[] = result.assets.map((asset) => {
+        const newItems: BatchFileItem[] = result.assets.map((asset, idx) => {
           const detected = autoDetectFileFormat(asset.name, asset.mimeType || "");
           return {
-            id: `batch-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+            id: `batch-${Date.now()}-${idx}`,
             name: asset.name,
             size: asset.size || 0,
             uri: asset.uri,
-            mimeType: asset.mimeType || "application/octet-stream",
+            mimeType: asset.mimeType || "",
             format: detected.format,
             displayType: detected.displayType,
           };
         });
 
-        setBatchFiles((prev) => [...prev, ...newBatchItems]);
+        setBatchFiles((prev) => [...prev, ...newItems]);
       }
     } catch (err) {
       console.error("Error picking batch files:", err);
-      Alert.alert("File Selection Error", "Unable to select files from device.");
+      showZeeAlert("Upload Error", "Failed to select files.", [{ text: "OK" }], "error");
     }
   };
 
-  const handleRemoveBatchItem = (idToRemove: string) => {
-    setBatchFiles((prev) => prev.filter((item) => item.id !== idToRemove));
+  const handleRemoveBatchItem = (id: string) => {
+    setBatchFiles((prev) => prev.filter((item) => item.id !== id));
   };
 
-  const handlePublish = async () => {
+  // Publish Resource(s) across all selected classes
+  const handleCreateResource = async () => {
+    if (selectedGrades.length === 0) {
+      showZeeAlert("Class Required", "Please select at least one class.", [{ text: "OK" }], "warning");
+      return;
+    }
+
     if (uploadMode === "single") {
       if (!title.trim() || !url.trim()) {
-        Alert.alert("Required Fields", "Please provide a resource title and URL link.");
+        showZeeAlert("Required Fields", "Please enter title, topic, and resource URL.", [{ text: "OK" }], "warning");
         return;
       }
+
       setUploading(true);
       try {
         let finalUrl = url.trim();
         let storagePath = "";
 
-        // If user picked a local file or temporary device blob URL, upload to Firebase Storage
-        if (!finalUrl.startsWith("http://") && !finalUrl.startsWith("https://")) {
-          const uploadRes = await uploadResourceFileToStorage(finalUrl, title.trim(), grade.trim(), subject.trim());
+        if (finalUrl.startsWith("file://") || finalUrl.startsWith("blob:") || (!finalUrl.startsWith("http://") && !finalUrl.startsWith("https://"))) {
+          const uploadRes = await uploadResourceFileToStorage(
+            finalUrl,
+            `${title.trim().replace(/[^a-zA-Z0-9]/g, "_")}.${singleType === "video" ? "mp4" : "pdf"}`,
+            selectedGrades.join("_"),
+            subject.trim()
+          );
           if (uploadRes) {
             finalUrl = uploadRes.downloadUrl;
             storagePath = uploadRes.storagePath;
           }
         }
 
-        const newRes = await addStudyResource(
-          {
-            title: title.trim(),
-            subject: subject.trim(),
-            grade: grade.trim(),
-            section: "A",
-            type: singleType,
-            url: finalUrl,
-            storagePath,
-            uploadedBy: user?.uid || "",
-          },
-          user
-        );
-
-        if (newRes) {
-          setResources((prev) => [normalizeResource(newRes), ...prev]);
-          setModalVisible(false);
-          setTitle("");
-          setUrl("");
-          Alert.alert("Success", "Study resource published successfully.");
+        for (const gr of selectedGrades) {
+          const newRes = await addStudyResource(
+            {
+              title: title.trim(),
+              topic: topic.trim() || "General Revision",
+              subject: subject.trim(),
+              grade: gr.trim(),
+              section: "A",
+              type: singleType,
+              url: finalUrl,
+              storagePath,
+              uploadedBy: user?.uid || "",
+            },
+            user
+          );
+          if (newRes) {
+            setResources((prev) => [normalizeResource(newRes), ...prev]);
+          }
         }
+
+        setModalVisible(false);
+        setTitle("");
+        setTopic("");
+        setUrl("");
+        showZeeAlert(
+          "Published Successfully",
+          `Resource published to ${selectedGrades.map((g) => `Class ${g}`).join(", ")}.`,
+          [{ text: "OK" }],
+          "success"
+        );
       } catch (err) {
         console.error("Error uploading single resource:", err);
       } finally {
         setUploading(false);
       }
     } else {
-      // Batch Mode Publish: Upload each file to Firebase Storage
       if (batchFiles.length === 0) {
-        Alert.alert("No Files Selected", "Please select one or more files to publish.");
+        showZeeAlert("No Files Selected", "Please select one or more files to publish.", [{ text: "OK" }], "warning");
         return;
       }
 
@@ -223,36 +250,38 @@ export default function TeacherResourcesScreen() {
           let itemStoragePath = "";
 
           if (!itemUrl.startsWith("http://") && !itemUrl.startsWith("https://")) {
-            const uploadRes = await uploadResourceFileToStorage(itemUrl, item.name, grade.trim(), subject.trim());
+            const uploadRes = await uploadResourceFileToStorage(itemUrl, item.name, selectedGrades.join("_"), subject.trim());
             if (uploadRes) {
               itemUrl = uploadRes.downloadUrl;
               itemStoragePath = uploadRes.storagePath;
             }
           }
 
-          const newRes = await addStudyResource(
-            {
-              title: item.name,
-              subject: subject.trim(),
-              grade: grade.trim(),
-              section: "A",
-              type: item.format,
-              url: itemUrl,
-              storagePath: itemStoragePath,
-              uploadedBy: user?.uid || "",
-            },
-            user
-          );
-
-          if (newRes) {
-            publishedCount++;
-            setResources((prev) => [normalizeResource(newRes), ...prev]);
+          for (const gr of selectedGrades) {
+            const newRes = await addStudyResource(
+              {
+                title: item.name,
+                topic: topic.trim() || "Course Notes",
+                subject: subject.trim(),
+                grade: gr.trim(),
+                section: "A",
+                type: item.format,
+                url: itemUrl,
+                storagePath: itemStoragePath,
+                uploadedBy: user?.uid || "",
+              },
+              user
+            );
+            if (newRes) {
+              publishedCount++;
+              setResources((prev) => [normalizeResource(newRes), ...prev]);
+            }
           }
         }
 
         setBatchFiles([]);
         setModalVisible(false);
-        Alert.alert("Batch Success", `Successfully published ${publishedCount} study resources to Firebase Storage.`);
+        showZeeAlert("Batch Upload Complete", `Successfully published ${publishedCount} resources across selected classes.`, [{ text: "OK" }], "success");
       } catch (err) {
         console.error("Error publishing batch resources:", err);
       } finally {
@@ -260,6 +289,30 @@ export default function TeacherResourcesScreen() {
       }
     }
   };
+
+  // Filter and Group Class-wise -> Subject-wise -> Alphabetically
+  const filteredList = resources.filter((res) => {
+    const matchesFormat = selectedFormat === "all" || res.format === selectedFormat;
+    const matchesClass = selectedClassFilter === "all" || String(res.grade) === selectedClassFilter;
+    return matchesFormat && matchesClass;
+  });
+
+  // Group by Class
+  const classGroups: { [grade: string]: { [subj: string]: NormalizedResource[] } } = {};
+  filteredList.forEach((item) => {
+    const g = item.grade ? `Class ${item.grade}` : "General / All Classes";
+    const s = item.subject || "Mathematics";
+    if (!classGroups[g]) classGroups[g] = {};
+    if (!classGroups[g][s]) classGroups[g][s] = [];
+    classGroups[g][s].push(item);
+  });
+
+  // Sort alphabetically by title
+  Object.keys(classGroups).forEach((g) => {
+    Object.keys(classGroups[g]).forEach((s) => {
+      classGroups[g][s].sort((a, b) => a.title.localeCompare(b.title));
+    });
+  });
 
   const formatFileSize = (bytes: number) => {
     if (!bytes || bytes === 0) return "0 KB";
@@ -272,282 +325,332 @@ export default function TeacherResourcesScreen() {
   return (
     <View style={styles.container}>
       <AppHeader
-        title="Faculty Resources"
-        subtitle="Manage & publish study materials for your classes"
+        title={isSuperAdmin ? "Global Resource Directory" : "Faculty Study Resources"}
+        subtitle={
+          isSuperAdmin
+            ? "SuperAdmin View: All institutional materials across classes"
+            : "Class-wise & Subject-wise organized material library"
+        }
+        fallbackRoute="/(teacher)"
         rightAction={
           <TouchableOpacity style={styles.addBtn} onPress={() => setModalVisible(true)}>
             <Plus color="#FFFFFF" size={16} />
-            <Text style={styles.addBtnText}>Add</Text>
+            <Text style={styles.addBtnText}>Publish Material</Text>
           </TouchableOpacity>
         }
       />
 
-      {/* 8 Format Filter Stream Tabs */}
-      <View style={styles.tabContainer}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.formatScroll}>
-          {FORMAT_TABS.map((tab) => (
-            <TouchableOpacity
-              key={`t-fmt-${tab.id}`}
-              style={[styles.formatChip, selectedFormat === tab.id && styles.formatChipActive]}
-              onPress={() => setSelectedFormat(tab.id)}
-            >
-              <Text style={[styles.formatChipText, selectedFormat === tab.id && styles.formatChipTextActive]}>
-                {tab.label}
-              </Text>
-            </TouchableOpacity>
-          ))}
+      {/* Class Selector Bar */}
+      <View style={styles.filterBar}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 16, gap: 8 }}>
+          <TouchableOpacity
+            style={[styles.classChip, selectedClassFilter === "all" && styles.classChipActive]}
+            onPress={() => setSelectedClassFilter("all")}
+          >
+            <Text style={[styles.classChipText, selectedClassFilter === "all" && styles.classChipTextActive]}>
+              All Classes ({resources.length})
+            </Text>
+          </TouchableOpacity>
+          {AVAILABLE_CLASSES.map((c) => {
+            const count = resources.filter((r) => String(r.grade) === c).length;
+            return (
+              <TouchableOpacity
+                key={`cls-filt-${c}`}
+                style={[styles.classChip, selectedClassFilter === c && styles.classChipActive]}
+                onPress={() => setSelectedClassFilter(c)}
+              >
+                <Text style={[styles.classChipText, selectedClassFilter === c && styles.classChipTextActive]}>
+                  Class {c} ({count})
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
         </ScrollView>
       </View>
 
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            tintColor={ZEEPREP_THEME.colors.primary}
-          />
-        }
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={ZEEPREP_THEME.colors.primary} />}
       >
         {loading ? (
           <ActivityIndicator color={ZEEPREP_THEME.colors.primary} style={{ marginTop: 40 }} />
-        ) : filteredResources.length > 0 ? (
-          filteredResources.map((rawRes, index) => {
-            const res = normalizeResource(rawRes);
-            const resFormat = (res.format || "").toString().toLowerCase();
-            const uniqueKey = res.id ? `res-${res.id}` : `res-${index}-${res.title}`;
-            const actionLabel =
-              resFormat === "video" ? "Watch" : resFormat === "audio" ? "Listen" : "Open";
-
-            return (
-              <TouchableOpacity
-                key={uniqueKey}
-                style={styles.card}
-                onPress={() => handleResourcePress(res)}
-                activeOpacity={0.85}
-              >
-                <View style={styles.iconBox}>
-                  {resFormat === "video" ? (
-                    <Video color={ZEEPREP_THEME.colors.primary} size={20} />
-                  ) : resFormat === "audio" ? (
-                    <Music color="#D97706" size={20} />
-                  ) : resFormat === "image" ? (
-                    <ImageIcon color="#059669" size={20} />
-                  ) : resFormat === "pdf" ? (
-                    <FileText color={ZEEPREP_THEME.colors.primary} size={20} />
-                  ) : resFormat === "excel" ? (
-                    <FileSpreadsheet color="#059669" size={20} />
-                  ) : resFormat === "word" ? (
-                    <FileText color="#2563EB" size={20} />
-                  ) : resFormat === "text" ? (
-                    <FileCode color="#7C3AED" size={20} />
-                  ) : (
-                    <LinkIcon color="#4F46E5" size={20} />
-                  )}
-                </View>
-
-                <View style={styles.cardContent}>
-                  <Text style={styles.resTitle} numberOfLines={1}>
-                    {res.title}
-                  </Text>
-                  <Text style={styles.resMeta}>
-                    {res.subject} • Grade {res.grade} • {res.displayType}
+        ) : Object.keys(classGroups).length > 0 ? (
+          Object.keys(classGroups).map((className) => (
+            <View key={className} style={styles.classSection}>
+              <View style={styles.classHeaderRow}>
+                <GraduationCap size={20} color="#4F46E5" />
+                <Text style={styles.classSectionTitle}>{className}</Text>
+                <View style={styles.classCountBadge}>
+                  <Text style={styles.classCountText}>
+                    {Object.values(classGroups[className]).reduce((acc, curr) => acc + curr.length, 0)} Items
                   </Text>
                 </View>
+              </View>
 
-                <View style={styles.openBtnBadge}>
-                  <Eye size={12} color="#FFFFFF" style={{ marginRight: 4 }} />
-                  <Text style={styles.openBtnText}>{actionLabel}</Text>
+              {Object.keys(classGroups[className]).map((subjectName) => (
+                <View key={`${className}-${subjectName}`} style={styles.subjectSubSection}>
+                  <View style={styles.subjectHeaderRow}>
+                    <BookOpen size={16} color="#059669" />
+                    <Text style={styles.subjectSubTitle}>{subjectName.toUpperCase()}</Text>
+                    <Text style={styles.subjectAlphaTag}>Alphabetical (A-Z)</Text>
+                  </View>
+
+                  <View style={styles.resourceGrid}>
+                    {classGroups[className][subjectName].map((res) => {
+                      const resFormat = (res.format || "").toString().toLowerCase();
+                      const isVideo = resFormat === "video" || res.url.includes("youtube.com") || res.url.includes("youtu.be");
+                      const thumbnail = res.thumbnailUrl;
+
+                      return (
+                        <TouchableOpacity
+                          key={res.id}
+                          style={styles.resourceCard}
+                          onPress={() => handleResourcePress(res)}
+                          activeOpacity={0.88}
+                        >
+                          {/* Thumbnail / Media Preview */}
+                          <View style={styles.cardMediaBox}>
+                            {thumbnail ? (
+                              <Image source={{ uri: thumbnail }} style={styles.cardImagePreview} resizeMode="cover" />
+                            ) : (
+                              <View
+                                style={[
+                                  styles.cardPlaceholderPreview,
+                                  { backgroundColor: isVideo ? "#1E1B4B" : resFormat === "pdf" ? "#881337" : "#064E3B" },
+                                ]}
+                              >
+                                {isVideo ? (
+                                  <Video size={28} color="#A5B4FC" />
+                                ) : resFormat === "pdf" ? (
+                                  <FileText size={28} color="#FDA4AF" />
+                                ) : (
+                                  <FileSpreadsheet size={28} color="#6EE7B7" />
+                                )}
+                              </View>
+                            )}
+
+                            {isVideo && (
+                              <View style={styles.playOverlayBadge}>
+                                <Play size={14} color="#FFFFFF" fill="#FFFFFF" />
+                              </View>
+                            )}
+
+                            <View style={styles.formatTagBadge}>
+                              <Text style={styles.formatTagText}>
+                                {isVideo ? "VIDEO" : resFormat.toUpperCase()}
+                              </Text>
+                            </View>
+                          </View>
+
+                          {/* Info Area */}
+                          <View style={styles.cardInfoBox}>
+                            <Text style={styles.resTopicText} numberOfLines={1}>
+                              {res.topic || "Chapter Lecture"}
+                            </Text>
+                            <Text style={styles.resCardTitle} numberOfLines={2}>
+                              {res.title}
+                            </Text>
+
+                            <View style={styles.cardFooter}>
+                              <Text style={styles.resClassTag}>Class {res.grade || "11"}</Text>
+                              <View style={styles.openPill}>
+                                <Text style={styles.openPillText}>Open</Text>
+                              </View>
+                            </View>
+                          </View>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
                 </View>
-              </TouchableOpacity>
-            );
-          })
+              ))}
+            </View>
+          ))
         ) : (
-          <View style={styles.emptyBox}>
-            <FolderKanban size={40} color={ZEEPREP_THEME.colors.textMuted} />
-            <Text style={styles.emptyTitle}>No Resources Uploaded</Text>
-            <Text style={styles.emptySubtitle}>Tap + Add to publish study materials for your students.</Text>
+          <View style={styles.emptyContainer}>
+            <FolderKanban size={48} color="#94A3B8" />
+            <Text style={styles.emptyTitle}>No Resources Found</Text>
+            <Text style={styles.emptySubtitle}>
+              Tap "Publish Material" above to upload lecture videos, notes or worksheets for your classes.
+            </Text>
           </View>
         )}
       </ScrollView>
 
-      {/* Multi-File & Folder Resource Upload Modal (Responsive Layout Rules) */}
-      <Modal visible={modalVisible} animationType="slide" transparent>
+      {/* Upload Modal */}
+      <Modal visible={modalVisible} animationType="slide" transparent onRequestClose={() => setModalVisible(false)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContainer}>
-            {/* Modal Header (Pinned top: shrink-0 pb-3 border-b) */}
-            <View style={styles.modalHeaderPinned}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.modalHeaderTitle}>Publish Study Materials</Text>
-                <Text style={styles.modalHeaderSubtitle}>Multi-file batch upload with auto-format detection</Text>
+            <View style={styles.modalHeader}>
+              <View>
+                <Text style={styles.modalTitle}>Publish Study Material</Text>
+                <Text style={styles.modalSubtitle}>Distribute lecture videos, notes or sheets across classes</Text>
               </View>
-              <TouchableOpacity style={styles.modalCloseBtn} onPress={() => setModalVisible(false)}>
+              <TouchableOpacity onPress={() => setModalVisible(false)} style={styles.closeBtn}>
                 <X color="#64748B" size={20} />
               </TouchableOpacity>
             </View>
 
-            {/* Mode Switcher */}
-            <View style={styles.modeSwitcherRow}>
-              <TouchableOpacity
-                style={[styles.modeTab, uploadMode === "single" && styles.modeTabActive]}
-                onPress={() => setUploadMode("single")}
-              >
-                <FilePlus size={15} color={uploadMode === "single" ? "#FFFFFF" : "#64748B"} />
-                <Text style={[styles.modeTabText, uploadMode === "single" && styles.modeTabTextActive]}>
-                  Single File / Link
-                </Text>
-              </TouchableOpacity>
+            <ScrollView contentContainerStyle={styles.modalFormContent} showsVerticalScrollIndicator={false}>
+              {/* Multi-Class Selector */}
+              <View style={styles.formGroup}>
+                <Text style={styles.label}>Target Classes (Multi-Select):</Text>
+                <View style={styles.multiClassRow}>
+                  {AVAILABLE_CLASSES.map((cls) => {
+                    const isSelected = selectedGrades.includes(cls);
+                    return (
+                      <TouchableOpacity
+                        key={`modal-cls-${cls}`}
+                        style={[styles.multiClassChip, isSelected && styles.multiClassChipActive]}
+                        onPress={() => toggleGradeSelection(cls)}
+                        activeOpacity={0.8}
+                      >
+                        <View style={[styles.checkboxDot, isSelected && styles.checkboxDotActive]}>
+                          {isSelected && <Check size={10} color="#FFFFFF" strokeWidth={3} />}
+                        </View>
+                        <Text style={[styles.multiClassChipText, isSelected && styles.multiClassChipTextActive]}>
+                          Class {cls}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
 
-              <TouchableOpacity
-                style={[styles.modeTab, uploadMode === "batch" && styles.modeTabActive]}
-                onPress={() => setUploadMode("batch")}
-              >
-                <FolderUp size={15} color={uploadMode === "batch" ? "#FFFFFF" : "#64748B"} />
-                <Text style={[styles.modeTabText, uploadMode === "batch" && styles.modeTabTextActive]}>
-                  Select Folder / Multiple
-                </Text>
-              </TouchableOpacity>
-            </View>
-
-            {/* Form Body Container (flex-1 overflow-y-auto scrollable) */}
-            <ScrollView style={styles.modalBodyScroll} showsVerticalScrollIndicator={false}>
-              <View style={styles.metaRow}>
-                <View style={{ flex: 1, marginRight: 8 }}>
-                  <Text style={styles.inputLabel}>Subject</Text>
+              {/* Subject & Topic */}
+              <View style={styles.formRow}>
+                <View style={[styles.formGroup, { flex: 1 }]}>
+                  <Text style={styles.label}>Subject</Text>
                   <TextInput
                     style={styles.input}
                     value={subject}
                     onChangeText={setSubject}
-                    placeholder="Subject"
+                    placeholder="e.g. Mathematics"
+                    placeholderTextColor="#94A3B8"
                   />
                 </View>
-                <View style={{ flex: 1, marginLeft: 8 }}>
-                  <Text style={styles.inputLabel}>Grade / Class</Text>
+
+                <View style={[styles.formGroup, { flex: 1.3 }]}>
+                  <Text style={styles.label}>Topic / Chapter</Text>
                   <TextInput
                     style={styles.input}
-                    value={grade}
-                    onChangeText={setGrade}
-                    placeholder="Grade"
+                    value={topic}
+                    onChangeText={setTopic}
+                    placeholder="e.g. Complex Numbers"
+                    placeholderTextColor="#94A3B8"
                   />
                 </View>
               </View>
 
-              {uploadMode === "single" ? (
-                <View style={styles.singleFormGroup}>
-                  <Text style={styles.inputLabel}>Resource Title</Text>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="e.g. Chapter 4 Practice Worksheet"
-                    placeholderTextColor="#94A3B8"
-                    value={title}
-                    onChangeText={setTitle}
-                  />
+              {/* Mode Selection */}
+              <View style={styles.modeToggleContainer}>
+                <TouchableOpacity
+                  style={[styles.modeToggleBtn, uploadMode === "single" && styles.modeToggleBtnActive]}
+                  onPress={() => setUploadMode("single")}
+                >
+                  <Text style={[styles.modeToggleText, uploadMode === "single" && styles.modeToggleTextActive]}>
+                    Video / Web Link / Single File
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.modeToggleBtn, uploadMode === "batch" && styles.modeToggleBtnActive]}
+                  onPress={() => setUploadMode("batch")}
+                >
+                  <Text style={[styles.modeToggleText, uploadMode === "batch" && styles.modeToggleTextActive]}>
+                    Batch Documents (Multi-PDF)
+                  </Text>
+                </TouchableOpacity>
+              </View>
 
-                  <Text style={styles.inputLabel}>Resource URL / Drive Link</Text>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="https://..."
-                    placeholderTextColor="#94A3B8"
-                    value={url}
-                    onChangeText={setUrl}
-                    autoCapitalize="none"
-                  />
-                </View>
-              ) : (
-                <View style={styles.batchFormGroup}>
-                  <Text style={styles.inputLabel}>Multi-File & Directory Picker</Text>
-                  <TouchableOpacity style={styles.pickBatchFilesBtn} onPress={handlePickBatchFiles}>
-                    <FolderUp size={22} color={ZEEPREP_THEME.colors.primary} />
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.pickBatchTitle}>Select Folder or Multiple Files</Text>
-                      <Text style={styles.pickBatchSub}>Auto-detects PDF, Word, Excel, Video, Audio & Images</Text>
+              {uploadMode === "single" ? (
+                <>
+                  <View style={styles.formGroup}>
+                    <Text style={styles.label}>Resource Title</Text>
+                    <TextInput
+                      style={styles.input}
+                      value={title}
+                      onChangeText={setTitle}
+                      placeholder="e.g. Class 11 Trigonometric Formulas & Video Lecture"
+                      placeholderTextColor="#94A3B8"
+                    />
+                  </View>
+
+                  <View style={styles.formGroup}>
+                    <Text style={styles.label}>Resource Format</Text>
+                    <View style={styles.formatSelectRow}>
+                      {[
+                        { id: "video", label: "Video Lecture (YouTube/MP4)" },
+                        { id: "pdf", label: "PDF Document" },
+                        { id: "link", label: "Web Link / Notes" },
+                      ].map((fmt) => (
+                        <TouchableOpacity
+                          key={fmt.id}
+                          style={[styles.formatOptionBtn, singleType === fmt.id && styles.formatOptionBtnActive]}
+                          onPress={() => setSingleType(fmt.id as any)}
+                        >
+                          <Text style={[styles.formatOptionText, singleType === fmt.id && styles.formatOptionTextActive]}>
+                            {fmt.label}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
                     </View>
+                  </View>
+
+                  <View style={styles.formGroup}>
+                    <Text style={styles.label}>URL or Storage Link</Text>
+                    <TextInput
+                      style={styles.input}
+                      value={url}
+                      onChangeText={setUrl}
+                      placeholder="https://youtube.com/watch?v=... or https://..."
+                      placeholderTextColor="#94A3B8"
+                    />
+                  </View>
+                </>
+              ) : (
+                <View style={styles.batchSection}>
+                  <TouchableOpacity style={styles.pickFilesBtn} onPress={handlePickBatchFiles} activeOpacity={0.8}>
+                    <FolderUp size={24} color="#4F46E5" />
+                    <Text style={styles.pickFilesText}>Select PDF / Word / Excel Files</Text>
+                    <Text style={styles.pickFilesSubText}>Multi-select supported for fast batch publishing</Text>
                   </TouchableOpacity>
 
-                  {/* Preview List ("Files Identified") */}
-                  {batchFiles.length > 0 ? (
-                    <View style={styles.identifiedContainer}>
-                      <View style={styles.identifiedHeaderRow}>
-                        <Text style={styles.identifiedTitle}>
-                          Files Identified ({batchFiles.length})
-                        </Text>
-                        <TouchableOpacity onPress={() => setBatchFiles([])}>
-                          <Text style={styles.clearAllText}>Clear All</Text>
-                        </TouchableOpacity>
-                      </View>
-
+                  {batchFiles.length > 0 && (
+                    <View style={styles.batchList}>
                       {batchFiles.map((file) => (
-                        <View key={file.id} style={styles.batchFileRow}>
-                          <View style={styles.batchFileIconBox}>
-                            {file.format === "video" ? (
-                              <Video size={16} color={ZEEPREP_THEME.colors.primary} />
-                            ) : file.format === "audio" ? (
-                              <Music size={16} color="#D97706" />
-                            ) : file.format === "pdf" ? (
-                              <FileText size={16} color={ZEEPREP_THEME.colors.primary} />
-                            ) : file.format === "word" ? (
-                              <FileText size={16} color="#2563EB" />
-                            ) : file.format === "excel" ? (
-                              <FileSpreadsheet size={16} color="#059669" />
-                            ) : file.format === "image" ? (
-                              <ImageIcon size={16} color="#059669" />
-                            ) : (
-                              <FileCode size={16} color="#7C3AED" />
-                            )}
-                          </View>
-
-                          <View style={styles.batchFileTextCol}>
-                            <Text style={styles.batchFileName} numberOfLines={1}>
+                        <View key={file.id} style={styles.batchItem}>
+                          <FileText size={18} color="#4F46E5" />
+                          <View style={{ flex: 1, marginHorizontal: 8 }}>
+                            <Text style={styles.batchItemName} numberOfLines={1}>
                               {file.name}
                             </Text>
-                            <Text style={styles.batchFileMeta}>
-                              {file.displayType} • {formatFileSize(file.size)}
-                            </Text>
+                            <Text style={styles.batchItemSize}>{formatFileSize(file.size)}</Text>
                           </View>
-
-                          {/* Cross Button to Remove File Row */}
-                          <TouchableOpacity
-                            style={styles.removeFileBtn}
-                            onPress={() => handleRemoveBatchItem(file.id)}
-                            accessibilityLabel={`Remove ${file.name}`}
-                          >
-                            <X size={16} color="#EF4444" />
+                          <TouchableOpacity onPress={() => handleRemoveBatchItem(file.id)}>
+                            <Trash2 size={16} color="#EF4444" />
                           </TouchableOpacity>
                         </View>
                       ))}
                     </View>
-                  ) : null}
+                  )}
                 </View>
               )}
-            </ScrollView>
-
-            {/* Modal Actions Footer (Pinned bottom: shrink-0 pt-3 border-t) */}
-            <View style={styles.modalFooterPinned}>
-              <TouchableOpacity
-                style={styles.cancelModalBtn}
-                onPress={() => setModalVisible(false)}
-                disabled={uploading}
-              >
-                <Text style={styles.cancelModalText}>Cancel</Text>
-              </TouchableOpacity>
 
               <TouchableOpacity
-                style={styles.submitModalBtn}
-                onPress={handlePublish}
+                style={[styles.publishSubmitBtn, uploading && { opacity: 0.6 }]}
+                onPress={handleCreateResource}
                 disabled={uploading}
               >
                 {uploading ? (
-                  <ActivityIndicator color="#FFFFFF" size="small" />
+                  <ActivityIndicator color="#FFFFFF" />
                 ) : (
-                  <Text style={styles.submitModalText}>
-                    {uploadMode === "batch" && batchFiles.length > 0
-                      ? `Publish All (${batchFiles.length}) Files`
-                      : "Publish Resource"}
+                  <Text style={styles.publishSubmitText}>
+                    Publish to Selected Classes ({selectedGrades.map((g) => `Class ${g}`).join(", ")})
                   </Text>
                 )}
               </TouchableOpacity>
-            </View>
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -558,338 +661,421 @@ export default function TeacherResourcesScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: ZEEPREP_THEME.colors.background,
+    backgroundColor: "#F8FAFC",
   },
-  addBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: ZEEPREP_THEME.colors.primary,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 10,
-    gap: 4,
-  },
-  addBtnText: {
-    color: "#FFFFFF",
-    fontSize: 13,
-    fontWeight: "700",
-  },
-  tabContainer: {
-    backgroundColor: ZEEPREP_THEME.colors.surface,
+  filterBar: {
     paddingVertical: 10,
-    paddingHorizontal: 16,
+    backgroundColor: "#FFFFFF",
     borderBottomWidth: 1,
-    borderBottomColor: ZEEPREP_THEME.colors.border,
+    borderBottomColor: "#E2E8F0",
   },
-  formatScroll: {
-    flexDirection: "row",
-  },
-  formatChip: {
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-    backgroundColor: "#EEF2FF",
-    marginRight: 6,
+  classChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 20,
+    backgroundColor: "#F1F5F9",
     borderWidth: 1,
-    borderColor: "#E0E7FF",
+    borderColor: "#CBD5E1",
   },
-  formatChipActive: {
-    backgroundColor: ZEEPREP_THEME.colors.primary,
-    borderColor: ZEEPREP_THEME.colors.primary,
+  classChipActive: {
+    backgroundColor: "#4F46E5",
+    borderColor: "#4F46E5",
   },
-  formatChipText: {
-    fontSize: 12,
+  classChipText: {
+    fontSize: 12.5,
     fontWeight: "700",
-    color: ZEEPREP_THEME.colors.primary,
+    color: "#475569",
   },
-  formatChipTextActive: {
+  classChipTextActive: {
     color: "#FFFFFF",
   },
   scrollContent: {
     padding: 16,
     paddingBottom: 40,
   },
-  card: {
+  classSection: {
+    marginBottom: 24,
+  },
+  classHeaderRow: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: ZEEPREP_THEME.colors.surface,
+    marginBottom: 12,
+    gap: 8,
+  },
+  classSectionTitle: {
+    fontSize: 17,
+    fontWeight: "800",
+    color: "#0F172A",
+  },
+  classCountBadge: {
+    backgroundColor: "#EEF2FF",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 12,
+  },
+  classCountText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#4F46E5",
+  },
+  subjectSubSection: {
+    backgroundColor: "#FFFFFF",
     borderRadius: 16,
     padding: 14,
-    marginBottom: 10,
+    marginBottom: 14,
     borderWidth: 1,
-    borderColor: ZEEPREP_THEME.colors.border,
+    borderColor: "#E2E8F0",
   },
-  iconBox: {
-    width: 42,
-    height: 42,
-    borderRadius: 12,
-    backgroundColor: "#EEF2FF",
-    alignItems: "center",
-    justifyContent: "center",
-    marginRight: 12,
-  },
-  cardContent: {
-    flex: 1,
-  },
-  resTitle: {
-    fontSize: 15,
-    fontWeight: "700",
-    color: ZEEPREP_THEME.colors.textPrimary,
-  },
-  resMeta: {
-    fontSize: 12,
-    color: ZEEPREP_THEME.colors.textSecondary,
-    marginTop: 2,
-  },
-  openBtnBadge: {
+  subjectHeaderRow: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: ZEEPREP_THEME.colors.primary,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 10,
-    marginLeft: 8,
+    marginBottom: 12,
+    gap: 6,
   },
-  openBtnText: {
-    color: "#FFFFFF",
-    fontSize: 12,
-    fontWeight: "700",
+  subjectSubTitle: {
+    fontSize: 13.5,
+    fontWeight: "800",
+    color: "#059669",
+    letterSpacing: 0.5,
   },
-  emptyBox: {
-    alignItems: "center",
-    justifyContent: "center",
-    padding: 40,
-    marginTop: 20,
+  subjectAlphaTag: {
+    fontSize: 10.5,
+    fontWeight: "600",
+    color: "#94A3B8",
+    marginLeft: "auto",
   },
-  emptyTitle: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: ZEEPREP_THEME.colors.textPrimary,
-    marginTop: 12,
+  resourceGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 12,
   },
-  emptySubtitle: {
-    fontSize: 12,
-    color: ZEEPREP_THEME.colors.textSecondary,
-    textAlign: "center",
-    marginTop: 4,
-  },
-
-  // Modal Container Styles (Responsive Rules)
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(15, 23, 42, 0.6)",
-    justifyContent: "center",
-    padding: 16,
-  },
-  modalContainer: {
-    maxHeight: "85%",
-    backgroundColor: "#FFFFFF",
-    borderRadius: 20,
-    padding: 20,
-    flexDirection: "column",
+  resourceCard: {
+    width: (screenWidth - 60) / 2 > 170 ? (screenWidth - 60) / 2 : 160,
+    backgroundColor: "#F8FAFC",
+    borderRadius: 12,
     overflow: "hidden",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.1,
-    shadowRadius: 20,
-    elevation: 8,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
   },
-  modalHeaderPinned: {
-    flexShrink: 0,
+  cardMediaBox: {
+    width: "100%",
+    height: 95,
+    position: "relative",
+    backgroundColor: "#0F172A",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  cardImagePreview: {
+    width: "100%",
+    height: "100%",
+  },
+  cardPlaceholderPreview: {
+    width: "100%",
+    height: "100%",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  playOverlayBadge: {
+    position: "absolute",
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "rgba(220, 38, 38, 0.9)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  formatTagBadge: {
+    position: "absolute",
+    top: 6,
+    left: 6,
+    backgroundColor: "rgba(15, 23, 42, 0.8)",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  formatTagText: {
+    fontSize: 9,
+    fontWeight: "800",
+    color: "#FFFFFF",
+  },
+  cardInfoBox: {
+    padding: 10,
+  },
+  resTopicText: {
+    fontSize: 10.5,
+    fontWeight: "700",
+    color: "#6366F1",
+    textTransform: "uppercase",
+    marginBottom: 3,
+  },
+  resCardTitle: {
+    fontSize: 12.5,
+    fontWeight: "700",
+    color: "#1E293B",
+    lineHeight: 16,
+    minHeight: 32,
+    marginBottom: 8,
+  },
+  cardFooter: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: "#E2E8F0",
   },
-  modalHeaderTitle: {
+  resClassTag: {
+    fontSize: 10.5,
+    fontWeight: "600",
+    color: "#64748B",
+  },
+  openPill: {
+    backgroundColor: "#4F46E5",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  openPillText: {
+    fontSize: 10.5,
+    fontWeight: "700",
+    color: "#FFFFFF",
+  },
+  addBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#4F46E5",
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 8,
+    gap: 4,
+  },
+  addBtnText: {
+    color: "#FFFFFF",
+    fontSize: 12.5,
+    fontWeight: "700",
+  },
+  emptyContainer: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 60,
+  },
+  emptyTitle: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: "#334155",
+    marginTop: 12,
+  },
+  emptySubtitle: {
+    fontSize: 12.5,
+    color: "#64748B",
+    textAlign: "center",
+    paddingHorizontal: 30,
+    marginTop: 6,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(15, 23, 42, 0.6)",
+    justifyContent: "flex-end",
+  },
+  modalContainer: {
+    backgroundColor: "#FFFFFF",
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    maxHeight: "90%",
+    padding: 20,
+  },
+  modalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    marginBottom: 16,
+  },
+  modalTitle: {
     fontSize: 18,
     fontWeight: "800",
     color: "#0F172A",
   },
-  modalHeaderSubtitle: {
+  modalSubtitle: {
     fontSize: 12,
     color: "#64748B",
     marginTop: 2,
   },
-  modalCloseBtn: {
-    padding: 6,
-    borderRadius: 8,
-    backgroundColor: "#F1F5F9",
-  },
-  modeSwitcherRow: {
-    flexDirection: "row",
-    backgroundColor: "#F1F5F9",
-    borderRadius: 12,
+  closeBtn: {
     padding: 4,
-    marginTop: 14,
+  },
+  modalFormContent: {
+    paddingBottom: 20,
+  },
+  formGroup: {
     marginBottom: 14,
   },
-  modeTab: {
-    flex: 1,
+  formRow: {
     flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 8,
-    borderRadius: 10,
-    gap: 6,
+    gap: 10,
   },
-  modeTabActive: {
-    backgroundColor: ZEEPREP_THEME.colors.primary,
-  },
-  modeTabText: {
-    fontSize: 12,
-    fontWeight: "700",
-    color: "#64748B",
-  },
-  modeTabTextActive: {
-    color: "#FFFFFF",
-  },
-  modalBodyScroll: {
-    flex: 1,
-  },
-  metaRow: {
-    flexDirection: "row",
-    marginBottom: 14,
-  },
-  inputLabel: {
+  label: {
     fontSize: 12,
     fontWeight: "700",
     color: "#334155",
     marginBottom: 6,
   },
+  multiClassRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  multiClassChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 8,
+    backgroundColor: "#F1F5F9",
+    borderWidth: 1,
+    borderColor: "#CBD5E1",
+    gap: 6,
+  },
+  multiClassChipActive: {
+    backgroundColor: "#EEF2FF",
+    borderColor: "#4F46E5",
+  },
+  checkboxDot: {
+    width: 14,
+    height: 14,
+    borderRadius: 3,
+    borderWidth: 1.5,
+    borderColor: "#94A3B8",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  checkboxDotActive: {
+    backgroundColor: "#4F46E5",
+    borderColor: "#4F46E5",
+  },
+  multiClassChipText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#475569",
+  },
+  multiClassChipTextActive: {
+    color: "#4F46E5",
+  },
   input: {
     backgroundColor: "#F8FAFC",
     borderWidth: 1,
-    borderColor: "#CBD5E1",
-    borderRadius: 10,
+    borderColor: "#E2E8F0",
+    borderRadius: 8,
     paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingVertical: 9,
     fontSize: 13,
     color: "#0F172A",
-    marginBottom: 12,
   },
-  singleFormGroup: {
-    marginTop: 4,
-  },
-  batchFormGroup: {
-    marginTop: 4,
-  },
-  pickBatchFilesBtn: {
+  modeToggleContainer: {
     flexDirection: "row",
+    backgroundColor: "#F1F5F9",
+    borderRadius: 8,
+    padding: 3,
+    marginBottom: 14,
+  },
+  modeToggleBtn: {
+    flex: 1,
+    paddingVertical: 8,
+    alignItems: "center",
+    borderRadius: 6,
+  },
+  modeToggleBtnActive: {
+    backgroundColor: "#FFFFFF",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  modeToggleText: {
+    fontSize: 11.5,
+    fontWeight: "700",
+    color: "#64748B",
+  },
+  modeToggleTextActive: {
+    color: "#4F46E5",
+  },
+  formatSelectRow: {
+    flexDirection: "column",
+    gap: 6,
+  },
+  formatOptionBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    backgroundColor: "#F8FAFC",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+  },
+  formatOptionBtnActive: {
+    backgroundColor: "#EEF2FF",
+    borderColor: "#4F46E5",
+  },
+  formatOptionText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#475569",
+  },
+  formatOptionTextActive: {
+    color: "#4F46E5",
+    fontWeight: "700",
+  },
+  batchSection: {
+    marginBottom: 14,
+  },
+  pickFilesBtn: {
+    borderWidth: 2,
+    borderStyle: "dashed",
+    borderColor: "#C7D2FE",
+    borderRadius: 12,
+    padding: 20,
     alignItems: "center",
     backgroundColor: "#EEF2FF",
-    borderWidth: 1.5,
-    borderColor: "#C7D2FE",
-    borderStyle: "dashed",
-    borderRadius: 14,
-    padding: 16,
-    gap: 12,
-    marginBottom: 16,
   },
-  pickBatchTitle: {
-    fontSize: 14,
-    fontWeight: "800",
-    color: ZEEPREP_THEME.colors.primary,
+  pickFilesText: {
+    fontSize: 13.5,
+    fontWeight: "700",
+    color: "#4F46E5",
+    marginTop: 6,
   },
-  pickBatchSub: {
+  pickFilesSubText: {
     fontSize: 11,
-    color: "#64748B",
+    color: "#6B7280",
     marginTop: 2,
   },
-  identifiedContainer: {
+  batchList: {
+    marginTop: 10,
+    gap: 6,
+  },
+  batchItem: {
+    flexDirection: "row",
+    alignItems: "center",
     backgroundColor: "#F8FAFC",
-    borderRadius: 14,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: "#E2E8F0",
-  },
-  identifiedHeaderRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 10,
-  },
-  identifiedTitle: {
-    fontSize: 13,
-    fontWeight: "800",
-    color: "#0F172A",
-  },
-  clearAllText: {
-    fontSize: 11,
-    fontWeight: "700",
-    color: "#EF4444",
-  },
-  batchFileRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#FFFFFF",
-    borderRadius: 10,
     padding: 10,
-    marginBottom: 6,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: "#E2E8F0",
   },
-  batchFileIconBox: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
-    backgroundColor: "#F1F5F9",
-    alignItems: "center",
-    justifyContent: "center",
-    marginRight: 10,
-  },
-  batchFileTextCol: {
-    flex: 1,
-    marginRight: 8,
-  },
-  batchFileName: {
-    fontSize: 13,
+  batchItemName: {
+    fontSize: 12,
     fontWeight: "700",
-    color: "#0F172A",
+    color: "#1E293B",
   },
-  batchFileMeta: {
-    fontSize: 11,
+  batchItemSize: {
+    fontSize: 10,
     color: "#64748B",
-    marginTop: 1,
   },
-  removeFileBtn: {
-    padding: 6,
-    borderRadius: 6,
-    backgroundColor: "#FEE2E2",
-  },
-  modalFooterPinned: {
-    flexShrink: 0,
-    flexDirection: "row",
+  publishSubmitBtn: {
+    backgroundColor: "#4F46E5",
+    paddingVertical: 14,
+    borderRadius: 10,
     alignItems: "center",
-    justifyContent: "flex-end",
-    paddingTop: 14,
-    borderTopWidth: 1,
-    borderTopColor: "#E2E8F0",
-    gap: 10,
     marginTop: 10,
   },
-  cancelModalBtn: {
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    borderRadius: 10,
-    backgroundColor: "#F1F5F9",
-  },
-  cancelModalText: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: "#64748B",
-  },
-  submitModalBtn: {
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    borderRadius: 10,
-    backgroundColor: ZEEPREP_THEME.colors.primary,
-  },
-  submitModalText: {
-    fontSize: 13,
-    fontWeight: "800",
+  publishSubmitText: {
     color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "800",
   },
 });

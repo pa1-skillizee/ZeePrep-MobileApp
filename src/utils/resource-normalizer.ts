@@ -1,4 +1,3 @@
-import type { StudyResource } from "../types";
 
 export interface NormalizedResource {
   id: string;
