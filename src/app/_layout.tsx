@@ -31,6 +31,9 @@ export default function RootLayout() {
   // Dynamically configure Screen Security based on User Role (SuperAdmin vs Others)
   useEffect(() => {
     configureScreenSecurity(user?.role);
+    if (Platform.OS === "web" && typeof document !== "undefined") {
+      document.title = "ZeePrep — Smart LMS & NTA CBT Prep Platform";
+    }
   }, [user?.role]);
 
   // Initialize Firebase auth listener + safety timeout
